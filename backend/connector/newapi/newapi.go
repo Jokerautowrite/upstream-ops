@@ -136,11 +136,43 @@ func (c *Client) Login(ctx context.Context, ch *connector.Channel) (*connector.A
 }
 
 func (c *Client) CheckAuth(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) error {
-	if session == nil || session.Cookie == "" {
-		return errors.New("missing newapi cookie")
+	if session == nil || !newAPIHasAuth(session) {
+		return errors.New("missing newapi credential: 需要提供 Cookie 或系统访问令牌")
 	}
 	_, err := c.getJSON(ctx, strings.TrimRight(ch.SiteURL, "/")+"/api/user/self", session)
 	return err
+}
+
+// newAPIHasAuth 判断 session 是否带有 NewAPI 通过鉴权所必需的凭据。
+// NewAPI 支持两种鉴权：
+//   - 浏览器 session：Cookie 头（典型值 session=xxxxx; ...）
+//   - 系统访问令牌：Authorization 头（user.access_token，32 位字符串）
+//
+// 两者都需要搭配 New-Api-User 头，见 applyNewAPIAuth。
+func newAPIHasAuth(session *connector.AuthSession) bool {
+	if session == nil {
+		return false
+	}
+	return strings.TrimSpace(session.Cookie) != "" || strings.TrimSpace(session.AccessToken) != ""
+}
+
+// applyNewAPIAuth 把当前 session 的鉴权头挂到 resty 请求上。
+//   - 优先 Cookie（浏览器 session）；
+//   - 没填 Cookie 但填了 AccessToken 时改走 Authorization: <token>，对应 NewAPI 的系统访问令牌；
+//   - New-Api-User 始终带上（NewAPI 即便用 session 也要求这个头）。
+func applyNewAPIAuth(req *resty.Request, session *connector.AuthSession) {
+	if session == nil {
+		return
+	}
+	if strings.TrimSpace(session.Cookie) != "" {
+		req.SetHeader("Cookie", session.Cookie)
+	} else if token := strings.TrimSpace(session.AccessToken); token != "" {
+		// NewAPI middleware 会自动去掉 "Bearer " 前缀，这里直接给裸 token，行为最贴近 dashboard。
+		req.SetHeader("Authorization", token)
+	}
+	if strings.TrimSpace(session.UserID) != "" {
+		req.SetHeader("New-Api-User", session.UserID)
+	}
 }
 
 func (c *Client) GetBalance(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) (*connector.BalanceResult, error) {
@@ -330,13 +362,12 @@ func (c *Client) RedeemCode(ctx context.Context, ch *connector.Channel, session 
 		status.QuotaPerUnit = 500000
 	}
 
-	resp, err := c.http.R().
+	req := c.http.R().
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/json").
-		SetHeader("Cookie", session.Cookie).
-		SetHeader("New-Api-User", session.UserID).
-		SetBody(map[string]string{"key": code}).
-		Post(site + "/api/user/topup")
+		SetBody(map[string]string{"key": code})
+	applyNewAPIAuth(req, session)
+	resp, err := req.Post(site + "/api/user/topup")
 	if err != nil {
 		return nil, fmt.Errorf("newapi redeem http: %w", err)
 	}
@@ -429,16 +460,15 @@ func (c *Client) CreateRecharge(ctx context.Context, ch *connector.Channel, sess
 	if req.Amount <= 0 || math.Trunc(req.Amount) != req.Amount {
 		return nil, errors.New("newapi 充值数量必须是正整数")
 	}
-	resp, err := c.http.R().
+	r := c.http.R().
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/json").
-		SetHeader("Cookie", session.Cookie).
-		SetHeader("New-Api-User", session.UserID).
 		SetBody(map[string]any{
 			"amount":         int64(req.Amount),
 			"payment_method": req.PaymentMethod,
-		}).
-		Post(strings.TrimRight(ch.SiteURL, "/") + "/api/user/pay")
+		})
+	applyNewAPIAuth(r, session)
+	resp, err := r.Post(strings.TrimRight(ch.SiteURL, "/") + "/api/user/pay")
 	if err != nil {
 		return nil, fmt.Errorf("newapi create recharge http: %w", err)
 	}
@@ -570,13 +600,12 @@ func (c *Client) CreateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 		return nil, errors.New("密钥名称不能为空")
 	}
 	body := buildNewAPICreateToken(req)
-	resp, err := c.http.R().
+	restyReq := c.http.R().
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/json").
-		SetHeader("Cookie", session.Cookie).
-		SetHeader("New-Api-User", session.UserID).
-		SetBody(body).
-		Post(strings.TrimRight(ch.SiteURL, "/") + "/api/token/")
+		SetBody(body)
+	applyNewAPIAuth(restyReq, session)
+	resp, err := restyReq.Post(strings.TrimRight(ch.SiteURL, "/") + "/api/token/")
 	if err != nil {
 		return nil, fmt.Errorf("newapi create api key http: %w", err)
 	}
@@ -605,13 +634,12 @@ func (c *Client) UpdateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 		return nil, errors.New("密钥 ID 无效")
 	}
 	body := buildNewAPIUpdateToken(id, req)
-	resp, err := c.http.R().
+	restyReq := c.http.R().
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/json").
-		SetHeader("Cookie", session.Cookie).
-		SetHeader("New-Api-User", session.UserID).
-		SetBody(body).
-		Put(strings.TrimRight(ch.SiteURL, "/") + "/api/token/")
+		SetBody(body)
+	applyNewAPIAuth(restyReq, session)
+	resp, err := restyReq.Put(strings.TrimRight(ch.SiteURL, "/") + "/api/token/")
 	if err != nil {
 		return nil, fmt.Errorf("newapi update api key http: %w", err)
 	}
@@ -643,11 +671,9 @@ func (c *Client) DeleteAPIKey(ctx context.Context, ch *connector.Channel, sessio
 	if id <= 0 {
 		return errors.New("密钥 ID 无效")
 	}
-	resp, err := c.http.R().
-		SetContext(ctx).
-		SetHeader("Cookie", session.Cookie).
-		SetHeader("New-Api-User", session.UserID).
-		Delete(strings.TrimRight(ch.SiteURL, "/") + "/api/token/" + strconv.FormatInt(id, 10))
+	delReq := c.http.R().SetContext(ctx)
+	applyNewAPIAuth(delReq, session)
+	resp, err := delReq.Delete(strings.TrimRight(ch.SiteURL, "/") + "/api/token/" + strconv.FormatInt(id, 10))
 	if err != nil {
 		return fmt.Errorf("newapi delete api key http: %w", err)
 	}
@@ -661,11 +687,9 @@ func (c *Client) RevealAPIKey(ctx context.Context, ch *connector.Channel, sessio
 	if id <= 0 {
 		return "", errors.New("密钥 ID 无效")
 	}
-	resp, err := c.http.R().
-		SetContext(ctx).
-		SetHeader("Cookie", session.Cookie).
-		SetHeader("New-Api-User", session.UserID).
-		Post(strings.TrimRight(ch.SiteURL, "/") + "/api/token/" + strconv.FormatInt(id, 10) + "/key")
+	revealReq := c.http.R().SetContext(ctx)
+	applyNewAPIAuth(revealReq, session)
+	resp, err := revealReq.Post(strings.TrimRight(ch.SiteURL, "/") + "/api/token/" + strconv.FormatInt(id, 10) + "/key")
 	if err != nil {
 		return "", fmt.Errorf("newapi reveal api key http: %w", err)
 	}
@@ -843,14 +867,7 @@ func (c *Client) postJSON(ctx context.Context, url string, session *connector.Au
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/json").
 		SetBody(body)
-	if session != nil {
-		if session.Cookie != "" {
-			req.SetHeader("Cookie", session.Cookie)
-		}
-		if session.UserID != "" {
-			req.SetHeader("New-Api-User", session.UserID)
-		}
-	}
+	applyNewAPIAuth(req, session)
 	resp, err := req.Post(url)
 	if err != nil {
 		return nil, err
@@ -863,15 +880,8 @@ func (c *Client) postJSON(ctx context.Context, url string, session *connector.Au
 
 func (c *Client) getRaw(ctx context.Context, url string, session *connector.AuthSession) ([]byte, error) {
 	req := c.http.R().SetContext(ctx)
-	if session != nil {
-		if session.Cookie != "" {
-			req.SetHeader("Cookie", session.Cookie)
-		}
-		// NewAPI 即便用 session 鉴权也要求带 New-Api-User 头（"unauthorized, New-Api-User header not provided"）。
-		if session.UserID != "" {
-			req.SetHeader("New-Api-User", session.UserID)
-		}
-	}
+	applyNewAPIAuth(req, session)
+	// NewAPI 即便用 session 鉴权也要求带 New-Api-User 头（"unauthorized, New-Api-User header not provided"）。
 	resp, err := req.Get(url)
 	if err != nil {
 		return nil, err

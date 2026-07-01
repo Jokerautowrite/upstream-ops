@@ -67,6 +67,7 @@ UpstreamOps 主要解决这些痛点：
 - 支持账号密码模式配置附加登录表单参数，适配需要额外字段的 NewAPI / Sub2API 魔改版登录接口。
 - 支持 Cloudflare Turnstile 打码配置，适用于开启 Turnstile 的上游登录场景。
 - 支持在渠道卡片中打开上游站点地址。
+- 支持在渠道卡片中清空已保存的登录信息。
 - 删除上游渠道时会自动清理相关快照、倍率、公告、通知冷却和通知日志。
 
 ### 余额与消费监控
@@ -275,7 +276,7 @@ IMAGE_TAG=latest
 生产环境建议锁定具体版本，例如：
 
 ```env
-IMAGE_TAG=v0.0.3
+IMAGE_TAG=v0.0.4
 ```
 
 ## MySQL 部署
@@ -452,6 +453,15 @@ POST /api/settings/proxy/test
 - `cookie`：浏览器开发者工具中复制的 Cookie。
 - `user_id`：NewAPI 个人设置页中的用户 ID。
 
+NewAPI token 模式同样支持使用系统访问令牌（`user.access_token`，即 NewAPI 个人设置页生成的「系统访问令牌」，32 位字符串）鉴权。改用 `access_token` 字段代替 `cookie`，二者互斥；`user_id` 仍必填：
+
+```json
+{
+	"access_token": "your-system-access-token",
+	"user_id": "123"
+}
+```
+
 ### Sub2API
 
 支持账号密码模式和 Token 模式。
@@ -460,11 +470,19 @@ Token 模式凭据：
 
 ```json
 {
-	"access_token": "your-access-token"
+	"access_token": "your-access-token",
+	"refresh_token": "your-refresh-token"
 }
 ```
 
-Token 模式不会自动续期。Token 失效时，渠道会显示登录或鉴权失败，需要重新粘贴凭据。
+`refresh_token` 可选但建议填写。填写后，Sub2API 会话和 Token 模式凭据可在 access token 失效后自动刷新；不填写时，Token 失效后需要重新粘贴凭据。
+
+### 清空登录信息
+
+渠道卡片的“更多”菜单支持清空登录信息：
+
+- 账号密码模式：只清空缓存会话。
+- Token 模式：清空缓存会话，并清空已保存的 token/cookie 凭据 JSON。
 
 ## 通知渠道配置
 
@@ -583,13 +601,13 @@ Webhook 请求体示例：
 
 ```json
 [
-	{ "channel_id": 1, "mode": "all" },
-	{ "channel_id": 2, "mode": "groups", "groups": ["default", "pro"], "events": ["rate_changed"] },
-	{ "channel_id": 3, "mode": "all", "events": ["announcement", "monitor_failed"] }
+	{ "channel_ids": [1, 2], "mode": "all" },
+	{ "channel_ids": [3], "mode": "groups", "groups": ["default", "pro"], "events": ["rate_changed"] },
+	{ "channel_ids": [4], "mode": "all", "events": ["announcement", "monitor_failed"] }
 ]
 ```
 
-- `channel_id`：上游渠道 ID。
+- `channel_ids`：上游渠道 ID 列表。历史 `channel_id` 单值规则仍兼容。
 - `events`：事件类型列表。缺省、`null` 或 `[]` 表示接收该上游全部事件；非空时只接收指定事件。
 - `mode=all`：倍率类事件接收该上游所有分组。
 - `mode=groups`：倍率类事件只接收 `groups` 中指定的模型或分组。
@@ -712,6 +730,7 @@ GET /api/announcements?page=1&page_size=20
 ```text
 GET /api/channels?page=1&page_size=20
 GET /api/channels?page=1&page_size=-1  (返回全部)
+POST /api/channels/:id/clear-login-info
 ```
 
 返回统一分页结构：

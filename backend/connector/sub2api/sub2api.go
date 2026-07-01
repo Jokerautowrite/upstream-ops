@@ -108,9 +108,10 @@ func (c *Client) Login(ctx context.Context, ch *connector.Channel) (*connector.A
 	}
 
 	var data struct {
-		Requires2FA bool   `json:"requires_2fa"`
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int64  `json:"expires_in"`
+		Requires2FA  bool   `json:"requires_2fa"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
 	}
 	if err := json.Unmarshal(wrapped.Data, &data); err != nil {
 		return nil, fmt.Errorf("sub2api login data: %w", err)
@@ -127,8 +128,58 @@ func (c *Client) Login(ctx context.Context, ch *connector.Channel) (*connector.A
 		expires = time.Now().Add(time.Hour)
 	}
 	return &connector.AuthSession{
-		AccessToken: data.AccessToken,
-		ExpiresAt:   expires,
+		AccessToken:  data.AccessToken,
+		RefreshToken: data.RefreshToken,
+		ExpiresAt:    expires,
+	}, nil
+}
+
+func (c *Client) RefreshSession(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) (*connector.AuthSession, error) {
+	if session == nil || strings.TrimSpace(session.RefreshToken) == "" {
+		return nil, errors.New("missing sub2api refresh_token")
+	}
+	site := strings.TrimRight(ch.SiteURL, "/")
+	resp, err := c.http.R().
+		SetContext(ctx).
+		SetHeader("Content-Type", "application/json").
+		SetBody(map[string]string{"refresh_token": strings.TrimSpace(session.RefreshToken)}).
+		Post(site + "/api/v1/auth/refresh")
+	if err != nil {
+		return nil, fmt.Errorf("sub2api refresh token http: %w", err)
+	}
+	if resp.IsError() {
+		return nil, fmt.Errorf("sub2api refresh token: %w", connector.HTTPStatusError(resp.StatusCode(), resp.Body()))
+	}
+	var wrapped sub2Resp
+	if err := json.Unmarshal(resp.Body(), &wrapped); err != nil {
+		return nil, fmt.Errorf("sub2api refresh token decode: %w", err)
+	}
+	if wrapped.Code != 0 {
+		return nil, fmt.Errorf("sub2api refresh token: %s", wrapped.Message)
+	}
+	var data struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
+	}
+	if err := json.Unmarshal(wrapped.Data, &data); err != nil {
+		return nil, fmt.Errorf("sub2api refresh token data: %w", err)
+	}
+	if strings.TrimSpace(data.AccessToken) == "" {
+		return nil, errors.New("sub2api refresh token: empty access_token")
+	}
+	expires := time.Now().Add(time.Duration(data.ExpiresIn) * time.Second)
+	if data.ExpiresIn <= 0 {
+		expires = time.Now().Add(time.Hour)
+	}
+	refreshToken := strings.TrimSpace(data.RefreshToken)
+	if refreshToken == "" {
+		refreshToken = strings.TrimSpace(session.RefreshToken)
+	}
+	return &connector.AuthSession{
+		AccessToken:  strings.TrimSpace(data.AccessToken),
+		RefreshToken: refreshToken,
+		ExpiresAt:    expires,
 	}, nil
 }
 

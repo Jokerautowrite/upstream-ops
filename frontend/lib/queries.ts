@@ -159,6 +159,52 @@ export function useChannelRates(channelID: number | null) {
   return useApi<RateSnapshot[]>(channelID == null ? null : `/channels/${channelID}/rates`)
 }
 
+// useMultiChannelRates 把多个上游渠道的倍率分组拉回来合并去重，
+// 供订阅规则"多选渠道 + 指定分组"场景使用。复用 fetchShared 缓存，
+// 单渠道请求仍与 useChannelRates 共享，不会重复打接口。
+export function useMultiChannelRates(channelIDs: number[]) {
+  const [data, setData] = useState<RateSnapshot[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [bump, setBump] = useState(0)
+  const refreshTick = useRefreshTick()
+  const key = channelIDs.slice().sort((a, b) => a - b).join(",")
+
+  useEffect(() => {
+    if (channelIDs.length === 0) {
+      setData(null)
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    Promise.all(
+      channelIDs.map((id) =>
+        fetchShared<RateSnapshot[]>(
+          `/channels/${id}/rates`,
+          cacheKey(`/channels/${id}/rates`, refreshTick, bump),
+        ),
+      ),
+    )
+      .then((results) => {
+        if (cancelled) return
+        setData(results.flat())
+      })
+      .catch(() => {
+        if (!cancelled) setData(null)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+    // channelIDs 是数组引用，用排序后的 key 字符串做依赖避免每次渲染都触发
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, refreshTick, bump])
+
+  return { data, loading, refetch: () => setBump((b) => b + 1) }
+}
+
 export function useRateChanges(page = 1, pageSize = 20, channelID?: number) {
   const q = new URLSearchParams()
   q.set("page", String(page))

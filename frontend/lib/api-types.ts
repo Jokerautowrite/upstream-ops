@@ -129,7 +129,7 @@ export interface BalanceSnapshot {
 }
 
 export interface NotificationSubscription {
-  channel_id: number
+  channel_ids: number[]
   mode: "all" | "groups"
   groups?: string[]
   events?: NotificationEvent[]

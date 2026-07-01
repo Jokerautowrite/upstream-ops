@@ -22,9 +22,8 @@ import (
 // SessionRefreshThreshold 距离过期还有多久就提前刷新登录。
 const SessionRefreshThreshold = 5 * time.Minute
 
-// tokenSessionTTL token 模式下"假装"给 AuthSession 的有效期。
-// token 由用户提供，我们没法续期，这里设一年只是为了避免 SessionRefreshThreshold 把它判过期。
-// 真正失效检测靠 connector.CheckAuth + 上游 401/403。
+// tokenSessionTTL token 模式下给用户提供的 access_token 一个兜底有效期。
+// 真正失效检测靠 connector.CheckAuth；若凭据里有 refresh_token，会优先尝试刷新并回写。
 const tokenSessionTTL = 365 * 24 * time.Hour
 
 // Service 渠道领域服务。
@@ -118,16 +117,22 @@ func (s *Service) ApplyHTTPConfig(conn any) {
 
 // NewAPITokenCredential token 模式下 NewAPI 的凭据 JSON 结构。
 //
-// Cookie：浏览器 DevTools 里拷出来的整条 Cookie 头
+// 两种鉴权方式二选一：
+//   - Cookie：浏览器 DevTools 里拷出来的整条 Cookie 头（典型形如 session=xxxxx; ...）
+//   - AccessToken：NewAPI「个人设置 / 生成的系统访问令牌」即 user.access_token（32 位字符串）
+//     发给上游时走 Authorization 头而不是 Cookie 头，session 续期无关。
+//
 // UserID：上游账号 ID（NewAPI 个人设置页可见，作为 New-Api-User 请求头必填）
 type NewAPITokenCredential struct {
-	Cookie string `json:"cookie"`
-	UserID string `json:"user_id"`
+	Cookie      string `json:"cookie,omitempty"`
+	AccessToken string `json:"access_token,omitempty"`
+	UserID      string `json:"user_id"`
 }
 
 // Sub2APITokenCredential token 模式下 Sub2API 的凭据。
 type Sub2APITokenCredential struct {
-	AccessToken string `json:"access_token"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
 }
 
 // CreateInput 新建渠道使用的明文输入。
@@ -405,8 +410,13 @@ func validateCredential(channelType storage.ChannelType, mode storage.Credential
 		if err := json.Unmarshal([]byte(raw), &cred); err != nil {
 			return fmt.Errorf("解析 NewAPI 凭据 JSON 失败：%w", err)
 		}
-		if strings.TrimSpace(cred.Cookie) == "" {
-			return errors.New("NewAPI token 模式需要 Cookie")
+		cookie := strings.TrimSpace(cred.Cookie)
+		accessToken := strings.TrimSpace(cred.AccessToken)
+		if cookie == "" && accessToken == "" {
+			return errors.New("NewAPI token 模式需要 Cookie 或系统访问令牌（二选一）")
+		}
+		if cookie != "" && accessToken != "" {
+			return errors.New("NewAPI token 模式 Cookie 与系统访问令牌只能二选一")
 		}
 		if strings.TrimSpace(cred.UserID) == "" {
 			return errors.New("NewAPI token 模式需要 User ID（在 NewAPI 个人设置页查看）")
@@ -428,6 +438,33 @@ func validateCredential(channelType storage.ChannelType, mode storage.Credential
 func (s *Service) Delete(id uint) error {
 	_ = s.AuthSessions.Delete(id)
 	return s.Channels.Delete(id)
+}
+
+// ClearLoginInfo 清空渠道当前保存的登录信息。
+//
+// password 模式：只删除登录后缓存的 AuthSession（access_token / refresh_token / cookie / csrf）。
+// token 模式：同时清空用户直接保存的 token/cookie JSON，避免继续复用旧凭据。
+func (s *Service) ClearLoginInfo(id uint) (*storage.Channel, error) {
+	c, err := s.Channels.FindByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.AuthSessions.Delete(c.ID); err != nil {
+		return nil, err
+	}
+	if c.CredentialMode == storage.CredentialModeToken {
+		c.PasswordCipher = ""
+		c.LastError = ""
+		if err := s.Channels.Update(c); err != nil {
+			return nil, err
+		}
+		return c, nil
+	}
+	c.LastError = ""
+	if err := s.Channels.SetLastError(c.ID, ""); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 // Resolve 把存储层的加密渠道解密成 connector 可用的 Channel。
@@ -481,6 +518,9 @@ func (s *Service) buildSessionFromToken(c *storage.Channel) (*connector.AuthSess
 	if err != nil {
 		return nil, fmt.Errorf("decrypt credential: %w", err)
 	}
+	if strings.TrimSpace(raw) == "" {
+		return nil, errors.New("登录信息已清空，请重新编辑渠道填写凭据")
+	}
 	switch c.Type {
 	case storage.ChannelTypeNewAPI:
 		var cred NewAPITokenCredential
@@ -488,9 +528,10 @@ func (s *Service) buildSessionFromToken(c *storage.Channel) (*connector.AuthSess
 			return nil, fmt.Errorf("parse newapi token credential: %w", err)
 		}
 		return &connector.AuthSession{
-			UserID:    cred.UserID,
-			Cookie:    cred.Cookie,
-			ExpiresAt: time.Now().Add(tokenSessionTTL),
+			UserID:      cred.UserID,
+			Cookie:      cred.Cookie,
+			AccessToken: cred.AccessToken,
+			ExpiresAt:   time.Now().Add(tokenSessionTTL),
 		}, nil
 	case storage.ChannelTypeSub2API:
 		var cred Sub2APITokenCredential
@@ -498,8 +539,9 @@ func (s *Service) buildSessionFromToken(c *storage.Channel) (*connector.AuthSess
 			return nil, fmt.Errorf("parse sub2api token credential: %w", err)
 		}
 		return &connector.AuthSession{
-			AccessToken: cred.AccessToken,
-			ExpiresAt:   time.Now().Add(tokenSessionTTL),
+			AccessToken:  strings.TrimSpace(cred.AccessToken),
+			RefreshToken: strings.TrimSpace(cred.RefreshToken),
+			ExpiresAt:    time.Now().Add(tokenSessionTTL),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown channel type: %s", c.Type)
@@ -584,8 +626,15 @@ func (s *Service) EnsureSession(
 			_ = s.Channels.SetLastError(c.ID, err.Error())
 			return nil, err
 		}
-		// 走一次 CheckAuth 确认 token 仍有效。失败立即标 last_error，调用方往上抛错。
+		// 走一次 CheckAuth 确认 token 仍有效。失败时如果有 refresh_token，先尝试刷新并回写。
 		if err := conn.CheckAuth(ctx, resolved, session); err != nil {
+			if refreshed, ok, refreshErr := s.refreshProvidedTokenSession(ctx, c, resolved, conn, session); refreshErr != nil {
+				progress.Fail(ctx, progress.StageSession, refreshErr.Error())
+				_ = s.Channels.SetLastError(c.ID, refreshErr.Error())
+				return nil, refreshErr
+			} else if ok {
+				return refreshed, nil
+			}
 			msg := "token 已失效，请重新粘贴凭据：" + err.Error()
 			progress.Fail(ctx, progress.StageSession, msg)
 			_ = s.Channels.SetLastError(c.ID, msg)
@@ -600,20 +649,126 @@ func (s *Service) EnsureSession(
 	if err != nil {
 		return nil, err
 	}
-	if saved != nil && saved.ExpiresAt != nil && time.Until(*saved.ExpiresAt) > SessionRefreshThreshold {
+	if saved != nil {
 		session, err := s.decryptSession(saved)
 		if err != nil {
 			return nil, err
 		}
-		// 轻量校验现有 session，不通过则继续走重新登录。
-		progress.Start(ctx, progress.StageSession, "校验已有会话…")
-		if err := conn.CheckAuth(ctx, resolved, session); err == nil {
-			progress.OK(ctx, progress.StageSession, "复用现有会话")
-			return session, nil
+		if saved.ExpiresAt != nil && time.Until(*saved.ExpiresAt) > SessionRefreshThreshold {
+			// 轻量校验现有 session，不通过则继续尝试 refresh_token / 重新登录。
+			progress.Start(ctx, progress.StageSession, "校验已有会话…")
+			if err := conn.CheckAuth(ctx, resolved, session); err == nil {
+				progress.OK(ctx, progress.StageSession, "复用现有会话")
+				return session, nil
+			}
+			progress.OK(ctx, progress.StageSession, "会话校验失败，尝试刷新")
 		}
-		progress.OK(ctx, progress.StageSession, "会话已失效，重新登录")
+		if refreshed, ok, err := s.refreshStoredSession(ctx, c, resolved, conn, session); err != nil {
+			return nil, err
+		} else if ok {
+			return refreshed, nil
+		}
 	}
 	return s.login(ctx, c, resolved, conn)
+}
+
+func (s *Service) refreshStoredSession(
+	ctx context.Context,
+	c *storage.Channel,
+	resolved *connector.Channel,
+	conn connector.Connector,
+	session *connector.AuthSession,
+) (*connector.AuthSession, bool, error) {
+	if strings.TrimSpace(session.RefreshToken) == "" {
+		return nil, false, nil
+	}
+	progress.Start(ctx, progress.StageSession, "使用 refresh_token 刷新会话…")
+	refreshed, err := refreshSession(ctx, resolved, conn, session)
+	if err != nil {
+		progress.OK(ctx, progress.StageSession, "刷新失败，重新登录")
+		return nil, false, nil
+	}
+	if err := s.persistSession(c.ID, refreshed); err != nil {
+		progress.Fail(ctx, progress.StageSession, err.Error())
+		return nil, false, err
+	}
+	_ = s.Channels.SetLastError(c.ID, "")
+	progress.OK(ctx, progress.StageSession, "会话刷新成功")
+	return refreshed, true, nil
+}
+
+func (s *Service) refreshProvidedTokenSession(
+	ctx context.Context,
+	c *storage.Channel,
+	resolved *connector.Channel,
+	conn connector.Connector,
+	session *connector.AuthSession,
+) (*connector.AuthSession, bool, error) {
+	if strings.TrimSpace(session.RefreshToken) == "" {
+		return nil, false, nil
+	}
+	progress.Start(ctx, progress.StageSession, "使用 refresh_token 刷新 token…")
+	refreshed, err := refreshSession(ctx, resolved, conn, session)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := conn.CheckAuth(ctx, resolved, refreshed); err != nil {
+		return nil, false, fmt.Errorf("刷新后的 token 校验失败：%w", err)
+	}
+	if err := s.persistTokenCredential(c, refreshed); err != nil {
+		return nil, false, err
+	}
+	_ = s.Channels.SetLastError(c.ID, "")
+	progress.OK(ctx, progress.StageSession, "token 刷新成功")
+	return refreshed, true, nil
+}
+
+func refreshSession(
+	ctx context.Context,
+	resolved *connector.Channel,
+	conn connector.Connector,
+	session *connector.AuthSession,
+) (*connector.AuthSession, error) {
+	refresher, ok := conn.(connector.SessionRefresher)
+	if !ok {
+		return nil, errors.New("connector does not support refresh_token")
+	}
+	refreshed, err := refresher.RefreshSession(ctx, resolved, session)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(refreshed.AccessToken) == "" {
+		return nil, errors.New("refresh token returned empty access_token")
+	}
+	if strings.TrimSpace(refreshed.RefreshToken) == "" {
+		refreshed.RefreshToken = session.RefreshToken
+	}
+	return refreshed, nil
+}
+
+func (s *Service) persistTokenCredential(c *storage.Channel, session *connector.AuthSession) error {
+	switch c.Type {
+	case storage.ChannelTypeSub2API:
+		cred := Sub2APITokenCredential{
+			AccessToken:  strings.TrimSpace(session.AccessToken),
+			RefreshToken: strings.TrimSpace(session.RefreshToken),
+		}
+		if cred.AccessToken == "" {
+			return errors.New("Sub2API token 模式需要 access_token")
+		}
+		raw, err := json.Marshal(cred)
+		if err != nil {
+			return fmt.Errorf("marshal sub2api token credential: %w", err)
+		}
+		enc, err := s.Cipher.Encrypt(string(raw))
+		if err != nil {
+			return fmt.Errorf("encrypt token credential: %w", err)
+		}
+		c.PasswordCipher = enc
+		return s.Channels.Update(c)
+	default:
+		return fmt.Errorf("%s token 模式不支持 refresh_token", c.Type)
+	}
 }
 
 func (s *Service) login(
@@ -656,6 +811,10 @@ func (s *Service) persistSession(channelID uint, session *connector.AuthSession)
 	if err != nil {
 		return fmt.Errorf("encrypt access token: %w", err)
 	}
+	refresh, err := s.Cipher.Encrypt(session.RefreshToken)
+	if err != nil {
+		return fmt.Errorf("encrypt refresh token: %w", err)
+	}
 	cookie, err := s.Cipher.Encrypt(session.Cookie)
 	if err != nil {
 		return fmt.Errorf("encrypt cookie: %w", err)
@@ -667,13 +826,14 @@ func (s *Service) persistSession(channelID uint, session *connector.AuthSession)
 	now := time.Now()
 	expires := session.ExpiresAt
 	return s.AuthSessions.Upsert(&storage.AuthSession{
-		ChannelID:         channelID,
-		UserID:            session.UserID,
-		AccessTokenCipher: acc,
-		CookieCipher:      cookie,
-		CSRFTokenCipher:   csrf,
-		ExpiresAt:         &expires,
-		LastLoginAt:       &now,
+		ChannelID:          channelID,
+		UserID:             session.UserID,
+		AccessTokenCipher:  acc,
+		RefreshTokenCipher: refresh,
+		CookieCipher:       cookie,
+		CSRFTokenCipher:    csrf,
+		ExpiresAt:          &expires,
+		LastLoginAt:        &now,
 	})
 }
 
@@ -681,6 +841,10 @@ func (s *Service) decryptSession(saved *storage.AuthSession) (*connector.AuthSes
 	acc, err := s.Cipher.Decrypt(saved.AccessTokenCipher)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt access token: %w", err)
+	}
+	refresh, err := s.Cipher.Decrypt(saved.RefreshTokenCipher)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt refresh token: %w", err)
 	}
 	cookie, err := s.Cipher.Decrypt(saved.CookieCipher)
 	if err != nil {
@@ -695,11 +859,12 @@ func (s *Service) decryptSession(saved *storage.AuthSession) (*connector.AuthSes
 		expires = *saved.ExpiresAt
 	}
 	return &connector.AuthSession{
-		UserID:      saved.UserID,
-		AccessToken: acc,
-		Cookie:      cookie,
-		CSRFToken:   csrf,
-		ExpiresAt:   expires,
+		UserID:       saved.UserID,
+		AccessToken:  acc,
+		RefreshToken: refresh,
+		Cookie:       cookie,
+		CSRFToken:    csrf,
+		ExpiresAt:    expires,
 	}, nil
 }
 

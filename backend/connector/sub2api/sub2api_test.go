@@ -44,7 +44,7 @@ func TestLoginAddsExtraParams(t *testing.T) {
 		if body["email"] != "u" || body["password"] != "p" || body["device_id"] != "d1" {
 			t.Fatalf("body = %#v", body)
 		}
-		_, _ = w.Write([]byte(`{"code":0,"message":"success","data":{"access_token":"token","expires_in":3600}}`))
+		_, _ = w.Write([]byte(`{"code":0,"message":"success","data":{"access_token":"token","refresh_token":"refresh","expires_in":3600}}`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -61,6 +61,40 @@ func TestLoginAddsExtraParams(t *testing.T) {
 	}
 	if session.AccessToken != "token" {
 		t.Fatalf("session = %#v", session)
+	}
+	if session.RefreshToken != "refresh" {
+		t.Fatalf("refresh token = %q, want refresh", session.RefreshToken)
+	}
+}
+
+func TestRefreshSession(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["refresh_token"] != "old-refresh" {
+			t.Fatalf("refresh_token = %q", body["refresh_token"])
+		}
+		_, _ = w.Write([]byte(`{"code":0,"message":"success","data":{"access_token":"new-token","refresh_token":"new-refresh","expires_in":3600}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New()
+	session, err := c.RefreshSession(context.Background(), &connector.Channel{SiteURL: srv.URL}, &connector.AuthSession{RefreshToken: "old-refresh"})
+	if err != nil {
+		t.Fatalf("RefreshSession: %v", err)
+	}
+	if session.AccessToken != "new-token" {
+		t.Fatalf("access token = %q, want new-token", session.AccessToken)
+	}
+	if session.RefreshToken != "new-refresh" {
+		t.Fatalf("refresh token = %q, want new-refresh", session.RefreshToken)
+	}
+	if time.Until(session.ExpiresAt) <= 0 {
+		t.Fatalf("expires at = %s, want future", session.ExpiresAt)
 	}
 }
 

@@ -24,11 +24,11 @@ const (
 
 // Channel 上游渠道账号。Password / Turnstile API key 等敏感字段都加密保存。
 //
-// 注意：会话凭据（access_token / cookie / csrf）单独存放在 AuthSession 表。
+// 注意：会话凭据（access_token / refresh_token / cookie / csrf）单独存放在 AuthSession 表。
 //
 // CredentialMode + PasswordCipher 的语义重载：
 //   - password 模式（默认）：Username + PasswordCipher 存账号密码，由 Connector.Login 用
-//   - token    模式：PasswordCipher 存 JSON blob（NewAPI: {cookie,user_id} / Sub2API: {access_token}），
+//   - token    模式：PasswordCipher 存 JSON blob（NewAPI: {cookie,user_id} / Sub2API: {access_token,refresh_token}），
 //     channel.Service 解析后直接构造 AuthSession，跳过 Login。Username 字段在 token 模式下保留
 //     用户填写的备注（一般是邮箱），仅做展示。
 //
@@ -68,14 +68,15 @@ func (Channel) TableName() string { return "channels" }
 // AuthSession 渠道登录后保存的凭据，按 ChannelID 一对一关联。
 // *Cipher 字段都用 AES-GCM 加密；UserID 是上游账号 ID 字符串（非敏感），明文存放。
 type AuthSession struct {
-	ChannelID         uint       `gorm:"primaryKey" json:"channel_id"`
-	UserID            string     `gorm:"size:64" json:"user_id,omitempty"`
-	AccessTokenCipher string     `gorm:"type:text" json:"-"`
-	CookieCipher      string     `gorm:"type:text" json:"-"`
-	CSRFTokenCipher   string     `gorm:"size:1024" json:"-"`
-	ExpiresAt         *time.Time `json:"expires_at,omitempty"`
-	LastLoginAt       *time.Time `json:"last_login_at,omitempty"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	ChannelID          uint       `gorm:"primaryKey" json:"channel_id"`
+	UserID             string     `gorm:"size:64" json:"user_id,omitempty"`
+	AccessTokenCipher  string     `gorm:"type:text" json:"-"`
+	RefreshTokenCipher string     `gorm:"type:text" json:"-"`
+	CookieCipher       string     `gorm:"type:text" json:"-"`
+	CSRFTokenCipher    string     `gorm:"size:1024" json:"-"`
+	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
+	LastLoginAt        *time.Time `json:"last_login_at,omitempty"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 func (AuthSession) TableName() string { return "auth_sessions" }

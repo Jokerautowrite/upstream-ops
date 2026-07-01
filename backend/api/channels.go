@@ -25,6 +25,7 @@ func registerChannels(g *gin.RouterGroup, d *Deps) {
 	gp.GET("/:id", func(c *gin.Context) { getChannel(c, d) })
 	gp.PUT("/:id", func(c *gin.Context) { updateChannel(c, d) })
 	gp.DELETE("/:id", func(c *gin.Context) { deleteChannel(c, d) })
+	gp.POST("/:id/clear-login-info", func(c *gin.Context) { clearChannelLoginInfo(c, d) })
 	gp.POST("/:id/enable", func(c *gin.Context) { toggleChannel(c, d, true) })
 	gp.POST("/:id/disable", func(c *gin.Context) { toggleChannel(c, d, false) })
 	gp.POST("/:id/test-login", func(c *gin.Context) { testLogin(c, d) })
@@ -242,6 +243,20 @@ func deleteChannel(c *gin.Context, d *Deps) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func clearChannelLoginInfo(c *gin.Context, d *Deps) {
+	id, err := uintParam(c, "id")
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	updated, err := d.ChannelSvc.ClearLoginInfo(id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": updated})
 }
 
 func toggleChannel(c *gin.Context, d *Deps, enabled bool) {

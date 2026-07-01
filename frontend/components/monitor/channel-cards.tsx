@@ -11,6 +11,7 @@ import {
   KeyRound,
   Loader2,
   LogIn,
+  MoreHorizontal,
   Pause,
   Pencil,
   Play,
@@ -33,6 +34,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Tooltip,
   TooltipContent,
@@ -974,27 +982,62 @@ export function ChannelCards() {
                       )}
                       {c.monitor_enabled ? "暂停监控" : "恢复监控"}
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="gap-1 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      disabled={busyAction === `delete-${c.id}`}
-                      onClick={async () => {
-                        const ok = await confirm({
-                          title: `删除渠道 ${c.name}？`,
-                          description: "删除后该渠道的余额历史、倍率快照与登录凭据都将一并清除，且无法恢复。",
-                          confirmLabel: "删除",
-                          destructive: true,
-                        })
-                        if (!ok) return
-                        void withBusy(`delete-${c.id}`, () =>
-                          apiFetch(`/channels/${c.id}`, { method: "DELETE" }),
-                        )
-                      }}
-                    >
-                      <Trash2 className="size-3" />
-                      {"删除"}
-                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1 text-xs text-muted-foreground"
+                          disabled={busyAction === `clear-login-${c.id}` || busyAction === `delete-${c.id}`}
+                        >
+                          <MoreHorizontal className="size-3" />
+                          {"更多"}
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-44">
+                        <DropdownMenuItem
+                          disabled={busyAction === `clear-login-${c.id}`}
+                          onSelect={async (e) => {
+                            e.preventDefault()
+                            const ok = await confirm({
+                              title: `清空 ${c.name} 的登录信息？`,
+                              description: "将清空缓存会话；Token 模式还会清空已保存的 Access Token、Refresh Token 和 NewAPI Cookie。账号密码本身不会删除。",
+                              confirmLabel: "清空",
+                              destructive: true,
+                            })
+                            if (!ok) return
+                            void withBusy(`clear-login-${c.id}`, async () => {
+                              await apiFetch(`/channels/${c.id}/clear-login-info`, { method: "POST" })
+                              toast.success("已清空登录信息")
+                            })
+                          }}
+                        >
+                          <XCircle className="size-3.5" />
+                          {"清空登录信息"}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          variant="destructive"
+                          disabled={busyAction === `delete-${c.id}`}
+                          onSelect={async (e) => {
+                            e.preventDefault()
+                            const ok = await confirm({
+                              title: `删除渠道 ${c.name}？`,
+                              description: "删除后该渠道的余额历史、倍率快照与登录凭据都将一并清除，且无法恢复。",
+                              confirmLabel: "删除",
+                              destructive: true,
+                            })
+                            if (!ok) return
+                            void withBusy(`delete-${c.id}`, () =>
+                              apiFetch(`/channels/${c.id}`, { method: "DELETE" }),
+                            )
+                          }}
+                        >
+                          <Trash2 className="size-3.5" />
+                          {"删除"}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </Card>
               )

@@ -24,14 +24,19 @@ import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import { ChevronsUpDown } from "lucide-react"
 import { apiFetch } from "@/lib/api"
 import { useTriggerRefresh } from "@/lib/refresh-context"
-import { useChannels, useChannelRates } from "@/lib/queries"
+import { useChannels, useMultiChannelRates } from "@/lib/queries"
 import type {
   NotificationChannel,
   NotificationChannelType,
   NotificationEvent,
-  NotificationSubscription,
 } from "@/lib/api-types"
 
 interface NotificationFormDialogProps {
@@ -65,7 +70,7 @@ interface ConfigState {
 }
 
 interface SubRow {
-  channel_id: number | null
+  channel_ids: number[]
   event_mode: "all" | "custom"
   events: NotificationEvent[]
   mode: "all" | "groups"
@@ -145,14 +150,22 @@ function initialState(c?: NotificationChannel | null): FormState {
   let subs: SubRow[] = []
   if (c?.subscriptions) {
     try {
-      const parsed = JSON.parse(c.subscriptions) as NotificationSubscription[]
-      subs = parsed.map((s) => ({
-        channel_id: s.channel_id,
-        event_mode: s.events && s.events.length > 0 ? "custom" : "all",
-        events: s.events ?? [],
-        mode: s.mode === "groups" ? "groups" : "all",
-        groups: s.groups ?? [],
-      }))
+      // 宽松解析：兼容历史 channel_id 单值格式（旧数据由后端原样返回）
+      const parsed = JSON.parse(c.subscriptions) as Array<Record<string, unknown>>
+      subs = parsed.map((s) => {
+        const ids = (s.channel_ids as number[] | undefined) ?? []
+        const legacyId = s.channel_id as number | undefined
+        const channel_ids =
+          ids.length > 0 ? ids : legacyId != null ? [legacyId] : []
+        const events = (s.events as NotificationEvent[] | undefined) ?? []
+        return {
+          channel_ids,
+          event_mode: events.length > 0 ? "custom" : "all",
+          events,
+          mode: s.mode === "groups" ? "groups" : "all",
+          groups: (s.groups as string[] | undefined) ?? [],
+        }
+      })
     } catch {
       subs = []
     }
@@ -248,7 +261,7 @@ export function NotificationFormDialog({
   function addSub() {
     setForm((f) => ({
       ...f,
-      subs: [...f.subs, { channel_id: null, event_mode: "all", events: [], mode: "all", groups: [] }],
+      subs: [...f.subs, { channel_ids: [], event_mode: "all", events: [], mode: "all", groups: [] }],
     }))
   }
 
@@ -271,8 +284,8 @@ export function NotificationFormDialog({
     try {
       // 校验订阅：未选上游的行禁止保存
       for (const s of form.subs) {
-        if (s.channel_id == null) {
-          throw new Error("订阅列表里有未选择的上游，请补全或删除")
+        if (s.channel_ids.length === 0) {
+          throw new Error("订阅列表里有未选择上游的规则，请补全或删除")
         }
         if (s.event_mode === "custom" && s.events.length === 0) {
           throw new Error("指定事件模式下至少选择一个事件")
@@ -306,7 +319,7 @@ export function NotificationFormDialog({
           const rateEventsEnabled = hasRateEvents(s)
           const mode = rateEventsEnabled ? s.mode : "all"
           return {
-            channel_id: s.channel_id as number,
+            channel_ids: s.channel_ids,
             mode,
             groups: mode === "groups" ? s.groups : [],
             events: s.event_mode === "custom" ? s.events : [],
@@ -752,8 +765,30 @@ interface SubRowEditorProps {
 function SubRowEditor({ rowIndex, row, channels, onChange, onRemove, disabled }: SubRowEditorProps) {
   // 只有真正展开 "指定分组" 时才拉 rates，避免每行都打一次接口
   const showRateGroupFilter = hasRateEvents(row)
-  const enableRateFetch = row.channel_id != null && row.mode === "groups" && showRateGroupFilter
-  const rates = useChannelRates(enableRateFetch ? row.channel_id : null)
+  const rateFetchIDs =
+    showRateGroupFilter && row.mode === "groups" ? row.channel_ids : []
+  const rates = useMultiChannelRates(rateFetchIDs)
+
+  const channelNameMap = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const c of channels) map.set(c.id, c.name)
+    return map
+  }, [channels])
+
+  const groupsByChannel = useMemo(() => {
+    const map = new Map<number, Set<string>>()
+    for (const r of rates.data ?? []) {
+      if (!map.has(r.channel_id)) map.set(r.channel_id, new Set())
+      map.get(r.channel_id)!.add(r.model_name)
+    }
+    return Array.from(map.entries())
+      .map(([channelId, groups]) => ({
+        channelId,
+        channelName: channelNameMap.get(channelId) ?? `渠道 ${channelId}`,
+        groups: Array.from(groups).sort((a, b) => a.localeCompare(b)),
+      }))
+      .sort((a, b) => a.channelName.localeCompare(b.channelName))
+  }, [rates.data, channelNameMap])
 
   const groupNames = useMemo(() => {
     const set = new Set<string>()
@@ -795,35 +830,100 @@ function SubRowEditor({ rowIndex, row, channels, onChange, onRemove, disabled }:
     onChange({ events: next })
   }
 
+  const selectedChannelCount = row.channel_ids.length
+  const allChannelsSelected =
+    channels.length > 0 && selectedChannelCount === channels.length
+  const someChannelsSelected = selectedChannelCount > 0 && !allChannelsSelected
+  const allChannelsChecked = allChannelsSelected ? true : someChannelsSelected ? "indeterminate" : false
+
+  function toggleChannel(id: number, checked: boolean) {
+    const next = checked
+      ? Array.from(new Set([...row.channel_ids, id]))
+      : row.channel_ids.filter((c) => c !== id)
+    onChange({ channel_ids: next })
+  }
+
   return (
     <div className="space-y-2 rounded-md border border-border p-2.5">
-      <div className="flex items-center gap-2">
-        <Select
-          value={row.channel_id != null ? String(row.channel_id) : ""}
-          onValueChange={(v) => onChange({ channel_id: Number(v), groups: [] })}
-          disabled={disabled}
-        >
-          <SelectTrigger className="h-8 flex-1 text-xs">
-            <SelectValue placeholder="选择渠道" />
-          </SelectTrigger>
-          <SelectContent>
-            {channels.map((c) => (
-              <SelectItem key={c.id} value={String(c.id)}>
-                {c.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
-          onClick={onRemove}
-          disabled={disabled}
-        >
-          <Trash2 className="size-3.5" />
-        </Button>
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="font-medium">选择渠道</span>
+          <div className="flex items-center gap-1">
+            <span className="text-[11px] text-muted-foreground">
+              已选 {selectedChannelCount}/{channels.length}
+            </span>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={onRemove}
+              disabled={disabled}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          </div>
+        </div>
+        {channels.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground">暂无可选上游渠道</p>
+        ) : (
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                role="combobox"
+                className="h-8 w-full justify-between text-xs font-normal"
+                disabled={disabled}
+              >
+                <span className="truncate">
+                  {selectedChannelCount === 0
+                    ? "请选择渠道"
+                    : selectedChannelCount === channels.length
+                      ? "全部渠道"
+                      : `已选 ${selectedChannelCount} 个渠道`}
+                </span>
+                <ChevronsUpDown className="ml-2 size-3.5 shrink-0 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+              <ScrollArea className="max-h-[min(320px,var(--radix-popover-content-available-height))]">
+                <div className="space-y-1 p-2">
+                  <label className="flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-xs hover:bg-accent">
+                    <Checkbox
+                      checked={allChannelsChecked}
+                      onCheckedChange={(v) =>
+                        onChange({ channel_ids: v === true ? channels.map((c) => c.id) : [] })
+                      }
+                      disabled={disabled}
+                    />
+                    <span className="font-medium">全选</span>
+                  </label>
+                  <div className="h-px bg-border" />
+                  {channels.map((c) => {
+                    const id = `ch-${rowIndex}-${c.id}`
+                    const checked = row.channel_ids.includes(c.id)
+                    return (
+                      <label
+                        key={c.id}
+                        htmlFor={id}
+                        className="flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-xs hover:bg-accent"
+                      >
+                        <Checkbox
+                          id={id}
+                          checked={checked}
+                          onCheckedChange={(v) => toggleChannel(c.id, !!v)}
+                          disabled={disabled}
+                        />
+                        <span className="truncate">{c.name}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </ScrollArea>
+            </PopoverContent>
+          </Popover>
+        )}
       </div>
 
       <RadioGroup
@@ -874,8 +974,8 @@ function SubRowEditor({ rowIndex, row, channels, onChange, onRemove, disabled }:
               已选 {selectedEventCount}/{notificationEventOptions.length}
             </span>
           </div>
-          <ScrollArea className="h-36 rounded border border-border bg-muted/30 p-2">
-            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+          <ScrollArea className="max-h-56 rounded border border-border bg-muted/30">
+            <div className="grid grid-cols-1 gap-1.5 p-2 sm:grid-cols-2">
               {notificationEventOptions.map((option) => {
                 const id = `event-${rowIndex}-${option.id}`
                 const checked = eventOptionChecked(option.events)
@@ -927,13 +1027,13 @@ function SubRowEditor({ rowIndex, row, channels, onChange, onRemove, disabled }:
 
       {showRateGroupFilter && row.mode === "groups" ? (
         <div className="space-y-1.5">
-          {row.channel_id == null ? (
+          {row.channel_ids.length === 0 ? (
             <p className="text-[11px] text-muted-foreground">请先选择上游</p>
           ) : rates.loading ? (
             <p className="text-[11px] text-muted-foreground">加载分组…</p>
           ) : groupNames.length === 0 ? (
             <p className="text-[11px] text-muted-foreground">
-              该上游暂未采集到分组数据，先去渠道页"手动刷新倍率"
+              所选上游暂未采集到分组数据，先去渠道页"手动刷新倍率"
             </p>
           ) : (
             <div className="space-y-1.5">
@@ -950,32 +1050,41 @@ function SubRowEditor({ rowIndex, row, channels, onChange, onRemove, disabled }:
                   已选 {selectedGroupCount}/{groupNames.length}
                 </span>
               </div>
-              <ScrollArea className="h-32 rounded border border-border bg-muted/30 p-2">
-                <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                  {groupNames.map((name) => {
-                    const id = `grp-${row.channel_id}-${name}`
-                    const checked = row.groups.includes(name)
-                    return (
-                      <label
-                        key={name}
-                        htmlFor={id}
-                        className="flex cursor-pointer items-center gap-1.5 text-xs"
-                      >
-                        <Checkbox
-                          id={id}
-                          checked={checked}
-                          onCheckedChange={(v) => toggleGroup(name, !!v)}
-                          disabled={disabled}
-                        />
-                        <span className="truncate">{name}</span>
-                      </label>
-                    )
-                  })}
+              <ScrollArea className="max-h-64 rounded border border-border bg-muted/30">
+                <div className="space-y-2 p-2">
+                  {groupsByChannel.map(({ channelId, channelName, groups }) => (
+                    <div key={channelId} className="space-y-1">
+                      <p className="text-[11px] font-medium text-muted-foreground px-1">
+                        {channelName}
+                      </p>
+                      <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+                        {groups.map((name) => {
+                          const id = `grp-${rowIndex}-${channelId}-${name}`
+                          const checked = row.groups.includes(name)
+                          return (
+                            <label
+                              key={name}
+                              htmlFor={id}
+                              className="flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-xs hover:bg-accent/50"
+                            >
+                              <Checkbox
+                                id={id}
+                                checked={checked}
+                                onCheckedChange={(v) => toggleGroup(name, !!v)}
+                                disabled={disabled}
+                              />
+                              <span className="truncate">{name}</span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </ScrollArea>
             </div>
           )}
-          {row.mode === "groups" && row.groups.length === 0 && row.channel_id != null ? (
+          {row.mode === "groups" && row.groups.length === 0 && row.channel_ids.length > 0 ? (
             <p className="text-[11px] text-warning">未勾选任何分组，倍率类事件不会命中</p>
           ) : null}
         </div>

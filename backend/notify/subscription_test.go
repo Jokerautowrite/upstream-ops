@@ -8,9 +8,9 @@ import (
 
 func TestSubscriptionMatchesLegacyAllEvents(t *testing.T) {
 	sub := Subscription{
-		ChannelID: 1,
-		Mode:      SubscriptionModeGroups,
-		Groups:    []string{"beta"},
+		ChannelIDs: []uint{1},
+		Mode:       SubscriptionModeGroups,
+		Groups:     []string{"beta"},
 	}
 
 	if !sub.Matches(Message{ChannelID: 1, Event: storage.EventAnnouncement}) {
@@ -26,8 +26,8 @@ func TestSubscriptionMatchesLegacyAllEvents(t *testing.T) {
 
 func TestSubscriptionMatchesSpecifiedEvents(t *testing.T) {
 	sub := Subscription{
-		ChannelID: 1,
-		Mode:      SubscriptionModeAll,
+		ChannelIDs: []uint{1},
+		Mode:       SubscriptionModeAll,
 		Events: []storage.NotificationEvent{
 			storage.EventAnnouncement,
 			storage.EventBalanceLow,
@@ -50,9 +50,9 @@ func TestSubscriptionMatchesSpecifiedEvents(t *testing.T) {
 
 func TestSubscriptionMatchesSpecifiedEventsAndGroups(t *testing.T) {
 	sub := Subscription{
-		ChannelID: 1,
-		Mode:      SubscriptionModeGroups,
-		Groups:    []string{"beta"},
+		ChannelIDs: []uint{1},
+		Mode:       SubscriptionModeGroups,
+		Groups:     []string{"beta"},
 		Events: []storage.NotificationEvent{
 			storage.EventRateChanged,
 			storage.EventSubscriptionExpiring,
@@ -70,5 +70,37 @@ func TestSubscriptionMatchesSpecifiedEventsAndGroups(t *testing.T) {
 	}
 	if sub.Matches(Message{ChannelID: 1, Event: storage.EventAnnouncement}) {
 		t.Fatal("subscription should reject unselected non-rate event")
+	}
+}
+
+// 多选渠道：一条规则覆盖多个上游，任一命中即放行。
+func TestSubscriptionMatchesMultipleChannels(t *testing.T) {
+	sub := Subscription{
+		ChannelIDs: []uint{1, 2, 3},
+		Mode:       SubscriptionModeAll,
+	}
+
+	if !sub.Matches(Message{ChannelID: 1, Event: storage.EventAnnouncement}) {
+		t.Fatal("subscription should match first channel")
+	}
+	if !sub.Matches(Message{ChannelID: 2, Event: storage.EventBalanceLow}) {
+		t.Fatal("subscription should match second channel")
+	}
+	if !sub.Matches(Message{ChannelID: 3, Event: storage.EventMonitorFailed}) {
+		t.Fatal("subscription should match third channel")
+	}
+	if sub.Matches(Message{ChannelID: 4, Event: storage.EventAnnouncement}) {
+		t.Fatal("subscription should reject channel not in list")
+	}
+}
+
+// 解析旧格式 channel_id（单值）应自动规整为 ChannelIDs。
+func TestParseSubscriptionsLegacyChannelID(t *testing.T) {
+	list, err := ParseSubscriptions(`[{"channel_id":7,"mode":"all"}]`)
+	if err != nil {
+		t.Fatalf("parse legacy: %v", err)
+	}
+	if len(list) != 1 || len(list[0].ChannelIDs) != 1 || list[0].ChannelIDs[0] != 7 {
+		t.Fatalf("legacy channel_id should migrate to ChannelIDs=[7], got %+v", list)
 	}
 }

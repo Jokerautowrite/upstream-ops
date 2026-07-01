@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -152,5 +153,198 @@ func TestApplyHTTPConfigUsesDefaults(t *testing.T) {
 	}
 	if conn.cfg.UserAgent != config.DefaultUpstreamUserAgent {
 		t.Fatalf("user agent = %q", conn.cfg.UserAgent)
+	}
+}
+
+func TestBuildSessionFromSub2APITokenCredentialIncludesRefreshToken(t *testing.T) {
+	svc, cipher := testService(t)
+	enc, err := cipher.Encrypt(`{"access_token":"access","refresh_token":"refresh"}`)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+
+	session, err := svc.buildSessionFromToken(&storage.Channel{
+		Type:           storage.ChannelTypeSub2API,
+		PasswordCipher: enc,
+	})
+	if err != nil {
+		t.Fatalf("buildSessionFromToken: %v", err)
+	}
+	if session.AccessToken != "access" {
+		t.Fatalf("access token = %q, want access", session.AccessToken)
+	}
+	if session.RefreshToken != "refresh" {
+		t.Fatalf("refresh token = %q, want refresh", session.RefreshToken)
+	}
+}
+
+func TestPersistSessionStoresRefreshToken(t *testing.T) {
+	svc, _ := testService(t)
+	session := &connector.AuthSession{
+		AccessToken:  "access",
+		RefreshToken: "refresh",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}
+	if err := svc.persistSession(7, session); err != nil {
+		t.Fatalf("persistSession: %v", err)
+	}
+
+	saved, err := svc.AuthSessions.FindByChannel(7)
+	if err != nil {
+		t.Fatalf("FindByChannel: %v", err)
+	}
+	if saved == nil {
+		t.Fatal("saved session is nil")
+	}
+	if saved.RefreshTokenCipher == "" {
+		t.Fatal("refresh token cipher is empty")
+	}
+
+	decrypted, err := svc.decryptSession(saved)
+	if err != nil {
+		t.Fatalf("decryptSession: %v", err)
+	}
+	if decrypted.RefreshToken != "refresh" {
+		t.Fatalf("refresh token = %q, want refresh", decrypted.RefreshToken)
+	}
+}
+
+func TestPersistTokenCredentialStoresSub2APIRefreshToken(t *testing.T) {
+	svc, cipher := testService(t)
+	oldCred, err := cipher.Encrypt(`{"access_token":"old","refresh_token":"old-refresh"}`)
+	if err != nil {
+		t.Fatalf("encrypt old credential: %v", err)
+	}
+	ch := &storage.Channel{
+		Name:           "sub",
+		Type:           storage.ChannelTypeSub2API,
+		SiteURL:        "https://example.com",
+		Username:       "u",
+		PasswordCipher: oldCred,
+		CredentialMode: storage.CredentialModeToken,
+		MonitorEnabled: true,
+	}
+	if err := svc.Channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	err = svc.persistTokenCredential(ch, &connector.AuthSession{
+		AccessToken:  "new",
+		RefreshToken: "new-refresh",
+	})
+	if err != nil {
+		t.Fatalf("persistTokenCredential: %v", err)
+	}
+
+	updated, err := svc.Channels.FindByID(ch.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	raw, err := cipher.Decrypt(updated.PasswordCipher)
+	if err != nil {
+		t.Fatalf("decrypt credential: %v", err)
+	}
+	var cred Sub2APITokenCredential
+	if err := json.Unmarshal([]byte(raw), &cred); err != nil {
+		t.Fatalf("unmarshal credential: %v", err)
+	}
+	if cred.AccessToken != "new" {
+		t.Fatalf("access token = %q, want new", cred.AccessToken)
+	}
+	if cred.RefreshToken != "new-refresh" {
+		t.Fatalf("refresh token = %q, want new-refresh", cred.RefreshToken)
+	}
+}
+
+func TestClearLoginInfoClearsTokenCredentialAndSession(t *testing.T) {
+	svc, cipher := testService(t)
+	enc, err := cipher.Encrypt(`{"cookie":"session=abc","user_id":"1"}`)
+	if err != nil {
+		t.Fatalf("encrypt credential: %v", err)
+	}
+	ch := &storage.Channel{
+		Name:           "newapi-token",
+		Type:           storage.ChannelTypeNewAPI,
+		SiteURL:        "https://example.com",
+		Username:       "memo",
+		PasswordCipher: enc,
+		CredentialMode: storage.CredentialModeToken,
+		MonitorEnabled: true,
+		LastError:      "old error",
+	}
+	if err := svc.Channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	if err := svc.persistSession(ch.ID, &connector.AuthSession{
+		AccessToken:  "access",
+		RefreshToken: "refresh",
+		Cookie:       "session=abc",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("persistSession: %v", err)
+	}
+
+	updated, err := svc.ClearLoginInfo(ch.ID)
+	if err != nil {
+		t.Fatalf("ClearLoginInfo: %v", err)
+	}
+	if updated.PasswordCipher != "" {
+		t.Fatalf("password cipher = %q, want empty", updated.PasswordCipher)
+	}
+	if updated.LastError != "" {
+		t.Fatalf("last error = %q, want empty", updated.LastError)
+	}
+	saved, err := svc.AuthSessions.FindByChannel(ch.ID)
+	if err != nil {
+		t.Fatalf("FindByChannel: %v", err)
+	}
+	if saved != nil {
+		t.Fatalf("auth session = %#v, want nil", saved)
+	}
+	if _, err := svc.buildSessionFromToken(updated); err == nil {
+		t.Fatal("buildSessionFromToken after clear succeeded, want error")
+	}
+}
+
+func TestClearLoginInfoKeepsPasswordCredential(t *testing.T) {
+	svc, cipher := testService(t)
+	enc, err := cipher.Encrypt("password")
+	if err != nil {
+		t.Fatalf("encrypt password: %v", err)
+	}
+	ch := &storage.Channel{
+		Name:           "password-channel",
+		Type:           storage.ChannelTypeSub2API,
+		SiteURL:        "https://example.com",
+		Username:       "u",
+		PasswordCipher: enc,
+		CredentialMode: storage.CredentialModePassword,
+		MonitorEnabled: true,
+		LastError:      "old error",
+	}
+	if err := svc.Channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	if err := svc.persistSession(ch.ID, &connector.AuthSession{
+		AccessToken:  "access",
+		RefreshToken: "refresh",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("persistSession: %v", err)
+	}
+
+	updated, err := svc.ClearLoginInfo(ch.ID)
+	if err != nil {
+		t.Fatalf("ClearLoginInfo: %v", err)
+	}
+	if updated.PasswordCipher != enc {
+		t.Fatal("password credential was cleared in password mode")
+	}
+	saved, err := svc.AuthSessions.FindByChannel(ch.ID)
+	if err != nil {
+		t.Fatalf("FindByChannel: %v", err)
+	}
+	if saved != nil {
+		t.Fatalf("auth session = %#v, want nil", saved)
 	}
 }

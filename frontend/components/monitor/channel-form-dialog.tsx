@@ -57,10 +57,14 @@ interface FormState {
 
   credential_mode: CredentialMode
   // NewAPI token 模式
+  // newapi_token_kind 决定用 Cookie 还是系统访问令牌走 NewAPI 鉴权
+  newapi_token_kind: "cookie" | "access_token"
   newapi_cookie: string
+  newapi_access_token: string
   newapi_user_id: string
   // Sub2API token 模式
   sub2api_access_token: string
+  sub2api_refresh_token: string
 
   balance_threshold: string
   recharge_multiplier: string
@@ -83,9 +87,12 @@ function initialState(c?: Channel | null): FormState {
     password: "",
     login_extra_params: c?.login_extra_params ?? "",
     credential_mode: c?.credential_mode ?? "password",
+    newapi_token_kind: "cookie",
     newapi_cookie: "",
+    newapi_access_token: "",
     newapi_user_id: "",
     sub2api_access_token: "",
+    sub2api_refresh_token: "",
     balance_threshold: c?.balance_threshold != null ? String(c.balance_threshold) : "0",
     recharge_multiplier: c?.recharge_multiplier != null ? String(c.recharge_multiplier) : "",
     recharge_multiplier_mode: rechargeMultiplierMode,
@@ -104,13 +111,21 @@ function initialState(c?: Channel | null): FormState {
  */
 function buildTokenCredential(form: FormState): string {
   if (form.type === "newapi") {
+    if (form.newapi_token_kind === "access_token") {
+      return JSON.stringify({
+        access_token: form.newapi_access_token.trim(),
+        user_id: form.newapi_user_id.trim(),
+      })
+    }
     return JSON.stringify({
       cookie: form.newapi_cookie.trim(),
       user_id: form.newapi_user_id.trim(),
     })
   }
+  const refreshToken = form.sub2api_refresh_token.trim()
   return JSON.stringify({
     access_token: form.sub2api_access_token.trim(),
+    ...(refreshToken ? { refresh_token: refreshToken } : {}),
   })
 }
 
@@ -169,23 +184,38 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
       let tokenCredential = ""
       if (isTokenMode) {
         if (form.type === "newapi") {
-          if (!isEdit || modeChanged || form.newapi_cookie || form.newapi_user_id) {
-            if (!form.newapi_cookie.trim()) throw new Error("NewAPI token 模式必须填写 Cookie")
+          const credField =
+            form.newapi_token_kind === "access_token"
+              ? form.newapi_access_token.trim()
+              : form.newapi_cookie.trim()
+          if (!isEdit || modeChanged || credField || form.newapi_user_id) {
+            if (!credField) {
+              throw new Error(
+                form.newapi_token_kind === "access_token"
+                  ? "NewAPI token 模式必须填写系统访问令牌"
+                  : "NewAPI token 模式必须填写 Cookie",
+              )
+            }
             if (!form.newapi_user_id.trim()) throw new Error("NewAPI token 模式必须填写 User ID")
           }
         } else {
-          if (!isEdit || modeChanged || form.sub2api_access_token) {
+          if (!isEdit || modeChanged || form.sub2api_access_token || form.sub2api_refresh_token) {
             if (!form.sub2api_access_token.trim())
               throw new Error("Sub2API token 模式必须填写 Access Token")
           }
         }
         // 只在用户填写了字段、或者首次创建、或者切换模式时下发 token_credential
+        const newapiCredFilled =
+          form.newapi_token_kind === "access_token"
+            ? form.newapi_access_token
+            : form.newapi_cookie
         if (
           !isEdit ||
           modeChanged ||
-          form.newapi_cookie ||
+          newapiCredFilled ||
           form.newapi_user_id ||
-          form.sub2api_access_token
+          form.sub2api_access_token ||
+          form.sub2api_refresh_token
         ) {
           tokenCredential = buildTokenCredential(form)
         }
@@ -405,24 +435,86 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
               {form.type === "newapi" ? (
                 <>
                   <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="newapi-cookie">Cookie</Label>
-                      <NewAPITokenHelp />
+                    <Label>鉴权方式</Label>
+                    <div className="grid grid-cols-1 gap-2 rounded-lg border border-border p-1 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={() => setForm({ ...form, newapi_token_kind: "cookie" })}
+                        className={cn(
+                          "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                          form.newapi_token_kind === "cookie"
+                            ? "bg-foreground text-background"
+                            : "text-muted-foreground hover:bg-muted",
+                        )}
+                      >
+                        Cookie (session)
+                      </button>
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={() => setForm({ ...form, newapi_token_kind: "access_token" })}
+                        className={cn(
+                          "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                          form.newapi_token_kind === "access_token"
+                            ? "bg-foreground text-background"
+                            : "text-muted-foreground hover:bg-muted",
+                        )}
+                      >
+                        系统访问令牌
+                      </button>
                     </div>
-                    <Textarea
-                      id="newapi-cookie"
-                      placeholder={
-                        isEdit
-                          ? "留空 = 不修改；填写则覆盖原 token"
-                          : "粘贴整段 Cookie 字符串，例：session=...; ..."
-                      }
-                      value={form.newapi_cookie}
-                      onChange={(e) => setForm({ ...form, newapi_cookie: e.target.value })}
-                      rows={3}
-                      className="field-sizing-fixed text-xs font-mono break-all"
-                      disabled={submitting}
-                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      {form.newapi_token_kind === "access_token"
+                        ? "对应 NewAPI 个人设置页生成的「系统访问令牌」(user.access_token)，请求走 Authorization 头。"
+                        : "浏览器登录后的整段 Cookie，典型形如 session=MTc4...; ..."}
+                    </p>
                   </div>
+
+                  {form.newapi_token_kind === "cookie" ? (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="newapi-cookie">Cookie</Label>
+                        <NewAPITokenHelp kind="cookie" />
+                      </div>
+                      <Textarea
+                        id="newapi-cookie"
+                        placeholder={
+                          isEdit
+                            ? "留空 = 不修改；填写则覆盖原 token"
+                            : "粘贴整段 Cookie 字符串，例：session=...; ..."
+                        }
+                        value={form.newapi_cookie}
+                        onChange={(e) => setForm({ ...form, newapi_cookie: e.target.value })}
+                        rows={3}
+                        className="field-sizing-fixed text-xs font-mono break-all"
+                        disabled={submitting}
+                      />
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="newapi-access-token">系统访问令牌</Label>
+                        <NewAPITokenHelp kind="access_token" />
+                      </div>
+                      <Textarea
+                        id="newapi-access-token"
+                        placeholder={
+                          isEdit
+                            ? "留空 = 不修改；填写则覆盖原令牌"
+                            : "粘贴 NewAPI 生成的 32 位系统访问令牌"
+                        }
+                        value={form.newapi_access_token}
+                        onChange={(e) =>
+                          setForm({ ...form, newapi_access_token: e.target.value })
+                        }
+                        rows={3}
+                        className="field-sizing-fixed text-xs font-mono break-all"
+                        disabled={submitting}
+                      />
+                    </div>
+                  )}
+
                   <div className="space-y-1.5">
                     <Label htmlFor="newapi-user-id">User ID</Label>
                     <Input
@@ -441,26 +533,46 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
               ) : null}
 
               {form.type === "sub2api" ? (
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="sub2api-token">Access Token</Label>
-                    <Sub2APITokenHelp />
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="sub2api-token">Access Token</Label>
+                      <Sub2APITokenHelp />
+                    </div>
+                    <Textarea
+                      id="sub2api-token"
+                      placeholder={
+                        isEdit
+                          ? "留空 = 不修改；填写则覆盖原 token"
+                          : "粘贴 access_token"
+                      }
+                      value={form.sub2api_access_token}
+                      onChange={(e) =>
+                        setForm({ ...form, sub2api_access_token: e.target.value })
+                      }
+                      rows={3}
+                      className="field-sizing-fixed text-xs font-mono break-all"
+                      disabled={submitting}
+                    />
                   </div>
-                  <Textarea
-                    id="sub2api-token"
-                    placeholder={
-                      isEdit
-                        ? "留空 = 不修改；填写则覆盖原 token"
-                        : "粘贴 access_token"
-                    }
-                    value={form.sub2api_access_token}
-                    onChange={(e) =>
-                      setForm({ ...form, sub2api_access_token: e.target.value })
-                    }
-                    rows={3}
-                    className="field-sizing-fixed text-xs font-mono break-all"
-                    disabled={submitting}
-                  />
+                  <div className="space-y-1.5">
+                    <Label htmlFor="sub2api-refresh-token">Refresh Token</Label>
+                    <Textarea
+                      id="sub2api-refresh-token"
+                      placeholder={
+                        isEdit
+                          ? "留空 = 不修改；如填写需同时填写 Access Token"
+                          : "粘贴 refresh_token（建议填写，用于后续续期）"
+                      }
+                      value={form.sub2api_refresh_token}
+                      onChange={(e) =>
+                        setForm({ ...form, sub2api_refresh_token: e.target.value })
+                      }
+                      rows={3}
+                      className="field-sizing-fixed text-xs font-mono break-all"
+                      disabled={submitting}
+                    />
+                  </div>
                 </div>
               ) : null}
             </>
@@ -650,7 +762,7 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
   )
 }
 
-function NewAPITokenHelp() {
+function NewAPITokenHelp({ kind = "cookie" }: { kind?: "cookie" | "access_token" }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -663,13 +775,29 @@ function NewAPITokenHelp() {
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-80 text-xs" align="end">
-        <p className="font-medium text-foreground">获取 Cookie</p>
-        <ol className="mt-1 ml-4 list-decimal space-y-0.5 text-muted-foreground">
-          <li>在浏览器登录 NewAPI 站点</li>
-          <li>按 F12 打开 DevTools，切到 Application / 存储 标签</li>
-          <li>左侧 Cookies 选中站点域名</li>
-          <li>复制 <span className="font-mono text-foreground">session</span> 字段值，格式：<span className="font-mono">session=xxxxx</span></li>
-        </ol>
+        {kind === "access_token" ? (
+          <>
+            <p className="font-medium text-foreground">获取系统访问令牌</p>
+            <ol className="mt-1 ml-4 list-decimal space-y-0.5 text-muted-foreground">
+              <li>在浏览器登录 NewAPI 站点，进入「个人设置」页</li>
+              <li>找到「生成的系统访问令牌」区块</li>
+              <li>点击生成并复制这串 32 位令牌（即 user.access_token）</li>
+            </ol>
+            <p className="mt-2 text-muted-foreground">
+              connector 用 <span className="font-mono text-foreground">Authorization</span> 头携带此令牌，不再依赖 Cookie 续期。
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="font-medium text-foreground">获取 Cookie</p>
+            <ol className="mt-1 ml-4 list-decimal space-y-0.5 text-muted-foreground">
+              <li>在浏览器登录 NewAPI 站点</li>
+              <li>按 F12 打开 DevTools，切到 Application / 存储 标签</li>
+              <li>左侧 Cookies 选中站点域名</li>
+              <li>复制 <span className="font-mono text-foreground">session</span> 字段值，格式：<span className="font-mono">session=xxxxx</span></li>
+            </ol>
+          </>
+        )}
         <p className="mt-2 font-medium text-foreground">获取 User ID</p>
         <p className="mt-1 text-muted-foreground">
           登录 NewAPI 后到「个人设置」页查看用户 ID，或到 Application / Local Storage 里复制 <span className="font-mono">uid</span>。
@@ -692,16 +820,17 @@ function Sub2APITokenHelp() {
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-96 text-xs" align="end">
-        <p className="font-medium text-foreground">获取 Access Token</p>
+        <p className="font-medium text-foreground">获取 Access Token / Refresh Token</p>
         <ol className="mt-1 ml-4 list-decimal space-y-0.5 text-muted-foreground">
           <li>在浏览器登录 Sub2API 站点</li>
           <li>按 F12 打开 DevTools，切到 Application / 存储 标签</li>
           <li>左侧 Local Storage 选中站点域名</li>
-          <li>找到 <span className="font-mono text-foreground">auth_token</span> 字段并复制；旧版可能叫 <span className="font-mono text-foreground">access_token</span></li>
+          <li>复制 <span className="font-mono text-foreground">auth_token</span> 或 <span className="font-mono text-foreground">access_token</span></li>
+          <li>同时复制 <span className="font-mono text-foreground">refresh_token</span>（如果站点已启用刷新令牌）</li>
         </ol>
         <p className="mt-2 font-medium text-foreground">登录后特征</p>
         <p className="mt-1 text-muted-foreground">
-          标准 Sub2API 登录接口是 <span className="font-mono">/api/v1/auth/login</span>，成功后返回 <span className="font-mono">access_token</span>，前端保存为 <span className="font-mono">auth_token</span>，后续请求头为 <span className="font-mono">Authorization: Bearer ...</span>。
+          标准 Sub2API 登录接口是 <span className="font-mono">/api/v1/auth/login</span>，成功后返回 <span className="font-mono">access_token</span>、<span className="font-mono">refresh_token</span> 和 <span className="font-mono">expires_in</span>，前端会把 access token 保存为 <span className="font-mono">auth_token</span>。
         </p>
         <p className="mt-2 text-[11px] text-muted-foreground">
           也可以在 Network 标签里找任意已登录接口的 <span className="font-mono">Authorization</span> 头，去掉 <span className="font-mono">Bearer </span> 前缀。

@@ -75,11 +75,12 @@ func round4(value float64) float64 {
 type AuthSession struct {
 	// UserID 上游账号 ID 字符串。NewAPI 必须在后续请求头里附带 `New-Api-User: <id>`。
 	// 不是机密信息，channel 层按明文存。
-	UserID      string
-	AccessToken string
-	Cookie      string
-	CSRFToken   string
-	ExpiresAt   time.Time
+	UserID       string
+	AccessToken  string
+	RefreshToken string
+	Cookie       string
+	CSRFToken    string
+	ExpiresAt    time.Time
 }
 
 // BalanceResult 一次余额采集结果。Balance 已经换算成显示单位（一般是 USD 等值）。
@@ -350,6 +351,11 @@ type Connector interface {
 	UpdateAPIKey(ctx context.Context, channel *Channel, session *AuthSession, id int64, req APIKeyUpdateRequest) (*APIKey, error)
 	DeleteAPIKey(ctx context.Context, channel *Channel, session *AuthSession, id int64) error
 	RevealAPIKey(ctx context.Context, channel *Channel, session *AuthSession, id int64) (string, error)
+}
+
+// SessionRefresher 是支持 refresh_token 续期的 connector 可选能力。
+type SessionRefresher interface {
+	RefreshSession(ctx context.Context, channel *Channel, session *AuthSession) (*AuthSession, error)
 }
 
 type ProxySetter interface {

@@ -30,6 +30,7 @@ type channelService interface {
 	Create(in channel.CreateInput) (*storage.Channel, error)
 	Update(id uint, in channel.UpdateInput) (*storage.Channel, error)
 	Delete(id uint) error
+	ClearLoginInfo(id uint) (*storage.Channel, error)
 	TestLogin(ctx context.Context, channelID uint) error
 	RedeemCode(ctx context.Context, channelID uint, code string) (*connector.RedeemResult, error)
 	GetRechargeInfo(ctx context.Context, channelID uint) (*connector.RechargeInfo, error)

@@ -63,6 +63,7 @@ UpstreamOps focuses on these problems:
 - Supports extra login form parameters for modified NewAPI or Sub2API login endpoints.
 - Supports Cloudflare Turnstile solving for upstream login flows.
 - Opens upstream site URLs directly from channel cards.
+- Supports clearing saved login information from channel cards.
 - Deleting a channel cleans related snapshots, rates, announcements, notification cooldowns, and notification logs.
 
 ### Balance and Spending Monitoring
@@ -262,7 +263,7 @@ IMAGE_TAG=latest
 For production, pin a specific version:
 
 ```env
-IMAGE_TAG=v0.0.3
+IMAGE_TAG=v0.0.4
 ```
 
 ## MySQL Deployment
@@ -434,6 +435,15 @@ Token/cookie mode:
 }
 ```
 
+NewAPI token mode also supports the system access token (`user.access_token`, the 32 character token generated from the personal settings page). Use `access_token` instead of `cookie`. Cookie and access token are mutually exclusive, but `user_id` is always required:
+
+```json
+{
+  "access_token": "your-system-access-token",
+  "user_id": "123"
+}
+```
+
 ### Sub2API
 
 Sub2API supports username/password mode and token mode.
@@ -442,11 +452,19 @@ Token mode credentials:
 
 ```json
 {
-  "access_token": "your-access-token"
+  "access_token": "your-access-token",
+  "refresh_token": "your-refresh-token"
 }
 ```
 
-Token mode does not renew tokens automatically. When the token expires, paste updated credentials.
+`refresh_token` is optional but recommended. When present, Sub2API sessions and token-mode credentials can be refreshed automatically after access-token expiration. Without `refresh_token`, paste updated credentials when the token expires.
+
+### Clear Login Information
+
+The channel card menu provides a clear-login action:
+
+- Password mode: clears only cached login sessions.
+- Token mode: clears cached sessions and the saved token/cookie credential JSON.
 
 ## Notification Channel Configuration
 
@@ -543,13 +561,13 @@ Notification channels can limit which upstreams, events, or rate groups they rec
 
 ```json
 [
-  { "channel_id": 1, "mode": "all" },
-  { "channel_id": 2, "mode": "groups", "groups": ["default", "pro"], "events": ["rate_changed"] },
-  { "channel_id": 3, "mode": "all", "events": ["announcement", "monitor_failed"] }
+  { "channel_ids": [1, 2], "mode": "all" },
+  { "channel_ids": [3], "mode": "groups", "groups": ["default", "pro"], "events": ["rate_changed"] },
+  { "channel_ids": [4], "mode": "all", "events": ["announcement", "monitor_failed"] }
 ]
 ```
 
-- `channel_id`: upstream channel ID.
+- `channel_ids`: upstream channel ID list. Historical `channel_id` single-value rules are still accepted.
 - `events`: event type list. Empty means all events for that upstream.
 - `mode=all`: receive all rate groups.
 - `mode=groups`: receive only selected groups for rate-related events.
@@ -598,6 +616,7 @@ Channels:
 ```text
 GET /api/channels?page=1&page_size=20
 GET /api/channels?page=1&page_size=-1
+POST /api/channels/:id/clear-login-info
 ```
 
 Recharge:
