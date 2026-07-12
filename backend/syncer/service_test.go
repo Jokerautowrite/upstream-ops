@@ -25,6 +25,7 @@ type fakeChannelService struct {
 	keys        []connector.APIKey
 	groups      []connector.APIKeyGroup
 	searchMiss  bool
+	uniqueKeys  bool
 	createCount int
 	updateCount int
 	deleteCount int
@@ -44,7 +45,12 @@ func (f *fakeChannelService) RevealAPIKey(ctx context.Context, channelID uint, k
 func (f *fakeChannelService) CreateAPIKey(ctx context.Context, channelID uint, req connector.APIKeyCreateRequest) (*connector.APIKey, error) {
 	f.createCount++
 	f.lastCreate = req
-	key := connector.APIKey{ID: int64(len(f.keys) + 1), Name: req.Name, Key: "sk-created", GroupID: req.GroupID, ModelLimits: req.ModelLimits}
+	id := int64(len(f.keys) + 1)
+	secret := "sk-created"
+	if f.uniqueKeys {
+		secret = fmt.Sprintf("sk-created-%d", id)
+	}
+	key := connector.APIKey{ID: id, Name: req.Name, Key: secret, GroupID: req.GroupID, ModelLimits: req.ModelLimits}
 	f.keys = append(f.keys, key)
 	return &key, nil
 }
@@ -682,8 +688,8 @@ func TestApplySyncGroupCreatesThenUpdatesManagedAccount(t *testing.T) {
 	if fake.lastCreate.GroupID == nil || *fake.lastCreate.GroupID != sourceGroupID {
 		t.Fatalf("create group id = %#v", fake.lastCreate.GroupID)
 	}
-	if fake.lastCreate.Name != rule.Name {
-		t.Fatalf("source key name = %q, want %q", fake.lastCreate.Name, rule.Name)
+	if fake.lastCreate.Name != rule.Name+"-账号1" {
+		t.Fatalf("source key name = %q, want %q", fake.lastCreate.Name, rule.Name+"-账号1")
 	}
 	if fake.lastCreate.ModelLimitsEnabled != nil || fake.lastCreate.ModelLimits != "" || fake.lastUpdate.ModelLimits != nil {
 		t.Fatalf("source key model limits should not be written: create=%#v/%q update=%#v", fake.lastCreate.ModelLimitsEnabled, fake.lastCreate.ModelLimits, fake.lastUpdate.ModelLimits)
@@ -1173,7 +1179,7 @@ func TestApplySyncGroupSkipsFailedModelSyncAndDisablesRemoteAccount(t *testing.T
 	}
 }
 
-func TestApplySyncGroupCreatesAccountsForMultipleAccounts(t *testing.T) {
+func TestApplySyncGroupCreatesDistinctSourceKeysForMultipleAccounts(t *testing.T) {
 	srv, admin := newAdminServer(t)
 	defer srv.Close()
 	db := openSyncerTestDB(t)
@@ -1181,6 +1187,7 @@ func TestApplySyncGroupCreatesAccountsForMultipleAccounts(t *testing.T) {
 	sourceGroupID := int64(1)
 	otherGroupID := int64(2)
 	fake := &fakeChannelService{
+		uniqueKeys: true,
 		groups: []connector.APIKeyGroup{
 			{ID: &sourceGroupID, Name: "source-low", Ratio: 0.06},
 			{ID: &otherGroupID, Name: "source-other", Ratio: 0.01},
@@ -1233,13 +1240,30 @@ func TestApplySyncGroupCreatesAccountsForMultipleAccounts(t *testing.T) {
 	if !log.Success {
 		t.Fatalf("apply log = %#v", log)
 	}
-	if fake.createCount != 1 || fake.updateCount != 1 || admin.createCount != 2 {
-		t.Fatalf("key create/update and account create = %d/%d/%d, want 1/1/2", fake.createCount, fake.updateCount, admin.createCount)
+	if fake.createCount != 2 || fake.updateCount != 0 || admin.createCount != 2 {
+		t.Fatalf("key create/update and account create = %d/%d/%d, want 2/0/2", fake.createCount, fake.updateCount, admin.createCount)
+	}
+	if len(fake.keys) != 2 {
+		t.Fatalf("source keys = %#v, want 2", fake.keys)
+	}
+	keyIDs := make(map[string]int64, len(fake.keys))
+	for _, key := range fake.keys {
+		keyIDs[key.Name] = key.ID
+	}
+	firstKeyName := rule.Name + "-账号1"
+	secondKeyName := rule.Name + "-账号2"
+	if keyIDs[firstKeyName] == 0 || keyIDs[secondKeyName] == 0 || keyIDs[firstKeyName] == keyIDs[secondKeyName] {
+		t.Fatalf("source key ids = %#v, want distinct names and ids", keyIDs)
 	}
 	first := admin.accounts[10]
 	second := admin.accounts[11]
 	if first["name"] != rule.Name+"-账号1 [source]" || second["name"] != rule.Name+"-账号2 [source]" {
 		t.Fatalf("account names = %#v / %#v", first["name"], second["name"])
+	}
+	firstCredentials := first["credentials"].(map[string]any)
+	secondCredentials := second["credentials"].(map[string]any)
+	if firstCredentials["api_key"] != "sk-created-1" || secondCredentials["api_key"] != "sk-created-2" {
+		t.Fatalf("account source keys = %#v / %#v, want distinct source secrets", firstCredentials["api_key"], secondCredentials["api_key"])
 	}
 	if first["rate_multiplier"] != float64(0.06) {
 		t.Fatalf("first multiplier = %#v, want 0.06", first["rate_multiplier"])
@@ -1252,6 +1276,33 @@ func TestApplySyncGroupCreatesAccountsForMultipleAccounts(t *testing.T) {
 	}
 	if first["priority"] != float64(1) || second["priority"] != float64(2) {
 		t.Fatalf("priorities = %#v / %#v, want 1 / 2", first["priority"], second["priority"])
+	}
+	managed, err := storage.NewUpstreamSyncManagedAccounts(db).ListBySyncGroupID(rule.ID)
+	if err != nil {
+		t.Fatalf("list managed accounts: %v", err)
+	}
+	if len(managed) != 2 {
+		t.Fatalf("managed accounts = %#v, want 2", managed)
+	}
+	managedKeyIDs := make(map[string]int64, len(managed))
+	for _, account := range managed {
+		managedKeyIDs[account.SourceAPIKeyName] = account.SourceAPIKeyID
+	}
+	if managedKeyIDs[firstKeyName] != keyIDs[firstKeyName] ||
+		managedKeyIDs[secondKeyName] != keyIDs[secondKeyName] {
+		t.Fatalf("managed source key mappings = %#v, keys = %#v", managedKeyIDs, keyIDs)
+	}
+
+	if _, err := svc.ApplySyncGroup(context.Background(), rule.ID); err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	if fake.createCount != 2 || len(fake.keys) != 2 || admin.createCount != 2 {
+		t.Fatalf("second apply recreated source keys or accounts: keys=%d/%d accounts=%d", fake.createCount, len(fake.keys), admin.createCount)
+	}
+	for _, key := range fake.keys {
+		if keyIDs[key.Name] != key.ID {
+			t.Fatalf("source key changed after second apply: %#v, first ids = %#v", fake.keys, keyIDs)
+		}
 	}
 }
 

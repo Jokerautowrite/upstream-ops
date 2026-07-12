@@ -848,7 +848,8 @@ func (s *Service) applyAccountsConcurrently(
 	remoteBeforeByID map[int64]sub2api.AdminAccount,
 	now time.Time,
 ) []syncAccountApplyOutcome {
-	// 同一源渠道会复用同一个源 Key，必须按账号顺序处理；不同源渠道才并发。
+	// 同一源渠道的源 Key 变更保持按账号顺序处理，避免并发创建竞争；
+	// 不同源渠道才并发。
 	indexesBySourceChannel := make(map[uint][]int)
 	sourceChannelIDs := make([]uint, 0)
 	for i, account := range accounts {
@@ -970,7 +971,7 @@ func (s *Service) applyAccount(
 	if err != nil {
 		return nil, err
 	}
-	keyName := sourceAPIKeyName(syncGroup)
+	keyName := managedObjectBaseName(syncGroup, syncAccount)
 	key, secret, err := s.ensureSourceAPIKey(ctx, syncGroup, syncAccount, keyName)
 	if err != nil {
 		return nil, err
