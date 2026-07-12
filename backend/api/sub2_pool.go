@@ -425,18 +425,12 @@ func applySub2PoolPriorities(c *gin.Context, service Sub2PoolService) {
 		failSub2Pool(c, sub2pool.ErrInvalidInput)
 		return
 	}
-	_, preview, err := service.SnapshotPreview(c.Request.Context(), targetID)
-	if err != nil {
-		failSub2Pool(c, err)
-		return
-	}
-	if input.SnapshotSignature == "" || input.SnapshotSignature != preview.Signature {
+	if input.SnapshotSignature == "" {
 		failSub2Pool(c, sub2pool.ErrPreviewConflict)
 		return
 	}
 	result, err := service.Apply(c.Request.Context(), targetID, sub2pool.ApplyInput{
-		Signature: preview.Signature,
-		Proposals: preview.Proposals,
+		Signature: input.SnapshotSignature,
 	})
 	if err != nil {
 		failSub2Pool(c, err)

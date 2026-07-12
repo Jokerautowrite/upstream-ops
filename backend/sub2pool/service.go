@@ -145,9 +145,7 @@ func (s *Service) Apply(ctx context.Context, targetID uint, input ApplyInput) (*
 	if len(preview.Guards) > 0 {
 		return nil, ErrGuardBlocked
 	}
-	if input.Signature == "" ||
-		input.Signature != previewSignature(snapshot, input.Proposals) ||
-		input.Signature != preview.Signature {
+	if input.Signature == "" || input.Signature != preview.Signature {
 		return nil, ErrPreviewConflict
 	}
 	if s.auto == nil {

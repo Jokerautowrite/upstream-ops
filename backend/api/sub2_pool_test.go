@@ -88,7 +88,7 @@ func TestSub2PoolRoutesExposeOnlySafeSnapshotFields(t *testing.T) {
 	}
 }
 
-func TestSub2PoolApplyRegeneratesPreviewAndRejectsConflict(t *testing.T) {
+func TestSub2PoolApplyDelegatesSingleSnapshotValidationToService(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service := newSub2PoolAPIStub()
 	router := gin.New()
@@ -110,7 +110,7 @@ func TestSub2PoolApplyRegeneratesPreviewAndRejectsConflict(t *testing.T) {
 		t.Fatalf("apply status=%d body=%s", applyRec.Code, applyRec.Body.String())
 	}
 	if service.applyCalls != 1 || service.lastApply.Signature != "preview-signature" ||
-		len(service.lastApply.Proposals) != 1 || service.lastApply.Proposals[0].AccountID != 11 {
+		len(service.lastApply.Proposals) != 0 || service.snapshotCalls != 1 {
 		t.Fatalf("apply input = %#v calls=%d", service.lastApply, service.applyCalls)
 	}
 
@@ -118,7 +118,7 @@ func TestSub2PoolApplyRegeneratesPreviewAndRejectsConflict(t *testing.T) {
 	conflictReq.Header.Set("Content-Type", "application/json")
 	conflictRec := httptest.NewRecorder()
 	router.ServeHTTP(conflictRec, conflictReq)
-	if conflictRec.Code != http.StatusConflict || service.applyCalls != 1 {
+	if conflictRec.Code != http.StatusConflict || service.applyCalls != 2 || service.snapshotCalls != 1 {
 		t.Fatalf("conflict status=%d calls=%d body=%s", conflictRec.Code, service.applyCalls, conflictRec.Body.String())
 	}
 }
@@ -220,6 +220,7 @@ func (s sub2PoolTargetsStub) List() ([]storage.UpstreamSyncTarget, error) {
 type sub2PoolAPIStub struct {
 	snapshot           *sub2pool.Snapshot
 	preview            *sub2pool.PriorityPreview
+	snapshotCalls      int
 	lastApply          sub2pool.ApplyInput
 	applyCalls         int
 	schedulableTarget  uint
@@ -287,12 +288,16 @@ func newSub2PoolAPIStub() *sub2PoolAPIStub {
 }
 
 func (s *sub2PoolAPIStub) SnapshotPreview(context.Context, uint) (*sub2pool.Snapshot, *sub2pool.PriorityPreview, error) {
+	s.snapshotCalls++
 	return s.snapshot, s.preview, nil
 }
 
 func (s *sub2PoolAPIStub) Apply(_ context.Context, targetID uint, input sub2pool.ApplyInput) (*sub2pool.ApplyResult, error) {
 	s.applyCalls++
 	s.lastApply = input
+	if input.Signature != s.preview.Signature {
+		return nil, sub2pool.ErrPreviewConflict
+	}
 	return &sub2pool.ApplyResult{
 		TargetID: targetID,
 		Applied:  []sub2pool.ApplyItem{{AccountID: 11, TargetPriority: 10, Status: "applied"}},
