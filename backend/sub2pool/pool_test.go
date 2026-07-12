@@ -36,6 +36,42 @@ func TestPriorityPreviewAssignsUniquePrioritiesForEqualRates(t *testing.T) {
 	}
 }
 
+func TestPreviewSignatureIgnoresFundedBalanceDrift(t *testing.T) {
+	before := Snapshot{
+		TargetID: 1,
+		Accounts: []AccountSnapshot{
+			priorityAccount(1, ChannelPLUS, 10, floatPtr(0.05), floatPtr(20)),
+		},
+	}
+	after := before
+	after.Accounts = append([]AccountSnapshot(nil), before.Accounts...)
+	after.Accounts[0].Balance = floatPtr(19.99)
+
+	beforePreview := buildPriorityPreview(before)
+	afterPreview := buildPriorityPreview(after)
+	if beforePreview.Signature != afterPreview.Signature {
+		t.Fatalf("funded balance drift changed signature: %s != %s", beforePreview.Signature, afterPreview.Signature)
+	}
+}
+
+func TestPreviewSignatureChangesWhenBalanceCrossesDebtBoundary(t *testing.T) {
+	before := Snapshot{
+		TargetID: 1,
+		Accounts: []AccountSnapshot{
+			priorityAccount(1, ChannelPLUS, 10, floatPtr(0.05), floatPtr(20)),
+		},
+	}
+	after := before
+	after.Accounts = append([]AccountSnapshot(nil), before.Accounts...)
+	after.Accounts[0].Balance = floatPtr(0)
+
+	beforePreview := buildPriorityPreview(before)
+	afterPreview := buildPriorityPreview(after)
+	if beforePreview.Signature == afterPreview.Signature {
+		t.Fatal("debt boundary change did not change signature")
+	}
+}
+
 func TestPriorityPreviewAvoidsCrossChannelCollisionsInSharedGroups(t *testing.T) {
 	kiro := priorityAccount(1, ChannelKiro, 90, floatPtr(0.05), floatPtr(20))
 	kiro.GroupIDs = []int64{1, 2}
