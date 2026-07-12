@@ -265,7 +265,7 @@ func previewSignature(snapshot Snapshot, proposals []PriorityProposal) string {
 		GroupIDs        []int64  `json:"group_ids"`
 		Channel         string   `json:"channel"`
 		UpstreamRate    *float64 `json:"upstream_rate,omitempty"`
-		Balance         *float64 `json:"balance,omitempty"`
+		BalanceState    string   `json:"balance_state"`
 		MatchStatus     string   `json:"match_status"`
 		IdentityDigest  string   `json:"identity_digest"`
 	}
@@ -283,7 +283,7 @@ func previewSignature(snapshot Snapshot, proposals []PriorityProposal) string {
 			GroupIDs:        groupIDs,
 			Channel:         account.Channel,
 			UpstreamRate:    cloneFloat(account.UpstreamRate),
-			Balance:         cloneFloat(account.Balance),
+			BalanceState:    balanceSignatureState(account.Balance),
 			MatchStatus:     account.MatchStatus,
 			IdentityDigest:  account.IdentityDigest,
 		})
@@ -301,6 +301,16 @@ func previewSignature(snapshot Snapshot, proposals []PriorityProposal) string {
 	raw, _ := json.Marshal(payload)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+func balanceSignatureState(balance *float64) string {
+	if balance == nil {
+		return "missing"
+	}
+	if *balance <= 0 {
+		return "debt"
+	}
+	return "funded"
 }
 
 func channelRank(channel string) int {
