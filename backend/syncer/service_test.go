@@ -1331,20 +1331,32 @@ func TestApplySyncGroupCreatesDistinctSourceKeysForMultipleAccounts(t *testing.T
 	}
 }
 
-func TestCanReuseManagedSourceAPIKeyRequiresUnchangedSyncAccount(t *testing.T) {
-	appliedAt := time.Now()
-	syncAccount := &storage.UpstreamSyncAccount{UpdatedAt: appliedAt.Add(-time.Second)}
+func TestCanReuseManagedSourceAPIKeyUsesExistingManagedSecret(t *testing.T) {
 	managed := &storage.UpstreamSyncManagedAccount{
 		SourceAPIKeyID:   9,
 		SourceAPIKeyName: "sync-1-账号1",
-		LastAppliedAt:    &appliedAt,
 	}
-	if !canReuseManagedSourceAPIKey(managed, syncAccount, "sync-1-账号1", "sk-existing") {
-		t.Fatal("unchanged managed source key should be reusable")
+	if !canReuseManagedSourceAPIKey(managed, "sync-1-账号1", "sk-existing") {
+		t.Fatal("managed source key with existing target secret should be reusable")
 	}
-	syncAccount.UpdatedAt = appliedAt.Add(time.Second)
-	if canReuseManagedSourceAPIKey(managed, syncAccount, "sync-1-账号1", "sk-existing") {
-		t.Fatal("updated sync account must refresh its source key configuration")
+	if canReuseManagedSourceAPIKey(managed, "sync-1-账号2", "sk-existing") {
+		t.Fatal("mismatched managed source key name must not be reused")
+	}
+}
+
+func TestSourceBindingChangedUsesGroupIDWhenAvailable(t *testing.T) {
+	groupID := int64(7)
+	renamedGroupID := int64(7)
+	otherGroupID := int64(8)
+	previous := storage.UpstreamSyncAccount{SourceChannelID: 1, SourceGroupID: &groupID, SourceGroupName: "old"}
+	if sourceBindingChanged(previous, storage.UpstreamSyncAccount{SourceChannelID: 1, SourceGroupID: &renamedGroupID, SourceGroupName: "new"}) {
+		t.Fatal("same source group id should remain bound when its display name changes")
+	}
+	if !sourceBindingChanged(previous, storage.UpstreamSyncAccount{SourceChannelID: 1, SourceGroupID: &otherGroupID}) {
+		t.Fatal("different source group id must invalidate the managed source key")
+	}
+	if !sourceBindingChanged(previous, storage.UpstreamSyncAccount{SourceChannelID: 2, SourceGroupID: &groupID}) {
+		t.Fatal("different source channel must invalidate the managed source key")
 	}
 }
 

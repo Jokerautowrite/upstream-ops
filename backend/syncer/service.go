@@ -486,6 +486,10 @@ func (s *Service) UpdateSyncGroup(id uint, in SyncGroupDTO) (*SyncGroupDTO, erro
 	if err != nil {
 		return nil, err
 	}
+	previousAccounts, err := s.syncAccounts.ListBySyncGroupID(id)
+	if err != nil {
+		return nil, err
+	}
 	item.TargetID = in.TargetID
 	item.DisplayName = strings.TrimSpace(in.DisplayName)
 	item.TargetGroupIDsJSON = marshalUintArray(in.TargetGroupIDs)
@@ -513,6 +517,9 @@ func (s *Service) UpdateSyncGroup(id uint, in SyncGroupDTO) (*SyncGroupDTO, erro
 	ids, _ := s.syncGroups.ParseTargetGroupIDs(item)
 	accounts, err := s.syncAccounts.ListBySyncGroupID(item.ID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.invalidateChangedSourceKeyMappings(previousAccounts, accounts); err != nil {
 		return nil, err
 	}
 	s.notifySyncGroupChanged("更新", item, accounts)
@@ -1872,7 +1879,7 @@ func (s *Service) ensureSourceAPIKey(ctx context.Context, syncGroup *storage.Ups
 		managed = mapped
 		managedKeyID = mapped.SourceAPIKeyID
 	}
-	if canReuseManagedSourceAPIKey(managed, syncAccount, keyName, existingSecret) {
+	if canReuseManagedSourceAPIKey(managed, keyName, existingSecret) {
 		return &connector.APIKey{ID: managedKeyID, Name: keyName}, strings.TrimSpace(existingSecret), nil
 	}
 	page, err := s.channelSvc.ListAPIKeys(ctx, syncAccount.SourceChannelID, connector.APIKeyQuery{
@@ -1944,15 +1951,50 @@ func (s *Service) ensureSourceAPIKey(ctx context.Context, syncGroup *storage.Ups
 	return key, secret, nil
 }
 
-func canReuseManagedSourceAPIKey(managed *storage.UpstreamSyncManagedAccount, syncAccount *storage.UpstreamSyncAccount, keyName, existingSecret string) bool {
+func canReuseManagedSourceAPIKey(managed *storage.UpstreamSyncManagedAccount, keyName, existingSecret string) bool {
 	if managed == nil ||
 		managed.SourceAPIKeyID <= 0 ||
 		strings.TrimSpace(managed.SourceAPIKeyName) != keyName ||
-		strings.TrimSpace(existingSecret) == "" ||
-		managed.LastAppliedAt == nil {
+		strings.TrimSpace(existingSecret) == "" {
 		return false
 	}
-	return !syncAccount.UpdatedAt.After(*managed.LastAppliedAt)
+	return true
+}
+
+func (s *Service) invalidateChangedSourceKeyMappings(previous, current []storage.UpstreamSyncAccount) error {
+	previousByID := make(map[uint]storage.UpstreamSyncAccount, len(previous))
+	for _, account := range previous {
+		previousByID[account.ID] = account
+	}
+	for _, account := range current {
+		before, ok := previousByID[account.ID]
+		if !ok || !sourceBindingChanged(before, account) {
+			continue
+		}
+		managed, err := s.managedAccounts.FindByAccountID(account.ID)
+		if err != nil || managed == nil {
+			continue
+		}
+		managed.SourceAPIKeyID = 0
+		managed.SourceAPIKeyName = ""
+		if err := s.managedAccounts.Upsert(managed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sourceBindingChanged(previous, current storage.UpstreamSyncAccount) bool {
+	if previous.SourceChannelID != current.SourceChannelID {
+		return true
+	}
+	if previous.SourceGroupID != nil || current.SourceGroupID != nil {
+		if previous.SourceGroupID == nil || current.SourceGroupID == nil {
+			return true
+		}
+		return *previous.SourceGroupID != *current.SourceGroupID
+	}
+	return !strings.EqualFold(strings.TrimSpace(previous.SourceGroupName), strings.TrimSpace(current.SourceGroupName))
 }
 
 func sourceAPIKeyNeedsUpdate(key *connector.APIKey, keyName string, groupID *int64, groupName string, unlimitedQuota *bool, expiredTime *int64) bool {
