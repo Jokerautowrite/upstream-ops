@@ -10,8 +10,11 @@ UpstreamOps v0.0.6.
 - Shows the current Sub2 account pool, health, balance, upstream multiplier,
   lowest group, current priority, and suggested priority.
 - Matches upstream data by the full SHA-256 API-key fingerprint and normalized
-  URL. Accounts without an exact fingerprint are not assigned an upstream
-  multiplier.
+  URL. An exact key match is the primary multiplier source.
+- Optionally imports an explicit legacy mapping of `Sub2 account ID + normalized
+  URL + UpstreamOps model name` for accounts without a usable key match. It
+  never derives a multiplier from an account name, never overrides an exact key
+  match, and never falls back after a key mismatch or ambiguous key match.
 - Only `apikey` accounts with `credentials.pool_mode=true` participate in
   automatic priority writes.
 - Uses unique priorities in steps of `10`; lower upstream multipliers come
@@ -36,9 +39,13 @@ UpstreamOps v0.0.6.
   never expose duplicate priorities and can resume safely after a restart.
 - Prepared runs, target state, notifications, and target leases are persisted
   so a process restart does not blindly replay an already completed write.
-- Five additive SQLite/MySQL tables are created on startup:
+- Six additive SQLite/MySQL tables are created on startup:
   `sub2_pool_target_states`, `sub2_pool_outbox`, `sub2_pool_runs`, and
-  `sub2_pool_automation`, plus `sub2_pool_leases`.
+  `sub2_pool_automation`, plus `sub2_pool_leases` and
+  `sub2_pool_account_rate_mappings`.
+- Importing a legacy map writes only `sub2_pool_account_rate_mappings` in the
+  local UpstreamOps database. It does not create, edit, schedule, or delete a
+  Sub2 account or API key.
 
 ## Configuration
 
@@ -46,7 +53,17 @@ UpstreamOps v0.0.6.
 SUB2_POOL_MIN_ACCOUNT_COUNT=20
 SUB2_POOL_MAX_CHANGES=20
 SUB2_POOL_LOW_BALANCE_THRESHOLD=10
+
+# Optional one-time migration. These two values must be set together.
+SUB2_POOL_ACCOUNT_RATE_MAP_IMPORT_PATH=/app/data/legacy-account-rate-map.json
+SUB2_POOL_ACCOUNT_RATE_MAP_IMPORT_TARGET_ID=1
 ```
+
+The import file is JSON with an `accounts` object. Each entry key is the Sub2
+account ID and each value must include `site_url` and `model`; `rate` is an
+optional manual fallback when the current monitored snapshots disagree or are
+missing. The import is all-or-nothing, runs only when that target has no stored
+mappings, and treats existing database rows as authoritative on later starts.
 
 ## Upgrade Workflow
 

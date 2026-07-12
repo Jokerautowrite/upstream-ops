@@ -90,9 +90,28 @@ type LeaseStore interface {
 }
 
 type Config struct {
-	MinimumAccountCount int
-	MaximumChanges      int
-	LowBalanceThreshold float64
+	MinimumAccountCount          int
+	MaximumChanges               int
+	LowBalanceThreshold          float64
+	AccountRateMapImportPath     string
+	AccountRateMapImportTargetID uint
+}
+
+type AccountRateMapping struct {
+	TargetID   uint
+	AccountID  int64
+	SiteURL    string
+	ModelName  string
+	ManualRate *float64
+	Enabled    bool
+}
+
+type AccountRateMappingStore interface {
+	ListAccountRateMappings(targetID uint) ([]AccountRateMapping, error)
+}
+
+type RateSnapshotStore interface {
+	ListByChannel(channelID uint) ([]storage.RateSnapshot, error)
 }
 
 func (c Config) withDefaults() Config {

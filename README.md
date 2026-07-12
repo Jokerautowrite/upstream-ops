@@ -83,6 +83,9 @@ UpstreamOps focuses on these problems:
 
 - Reuses the encrypted Sub2 target configured by Upstream Sync.
 - Only API-key accounts with `pool_mode=true` receive automatic priority proposals.
+- Full API-key fingerprints remain primary; an optional explicit account-ID map
+  can supplement missing key matches without using account names or writing
+  Sub2 accounts.
 - Priorities are unique per channel in steps of `10`; lower upstream rates come first and debt accounts come last.
 - Missing multiplier or balance data is skipped and reported without blocking other eligible accounts.
 - Rate changes and priority results are combined into one dedicated `sub2_pool_changed` notification.

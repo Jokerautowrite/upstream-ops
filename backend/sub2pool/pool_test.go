@@ -215,8 +215,9 @@ func TestPriorityPreviewPlacesDebtLastAndAllowsDebtWithoutMultiplier(t *testing.
 
 func TestMatcherUsesFullKeyHashBeforeURLAndNeverFallsBackAfterMismatch(t *testing.T) {
 	channels := &fakeChannels{items: []storage.Channel{{
-		ID:      7,
-		SiteURL: "https://api.example.test/v1/",
+		ID:             7,
+		SiteURL:        "https://api.example.test/v1/",
+		MonitorEnabled: true,
 	}}}
 	keys := &fakeKeys{
 		items: map[uint][]connector.APIKey{
@@ -259,8 +260,9 @@ func TestMatcherUsesFullKeyHashBeforeURLAndNeverFallsBackAfterMismatch(t *testin
 
 func TestMatcherUsesSameOriginKeyAcrossURLPath(t *testing.T) {
 	channels := &fakeChannels{items: []storage.Channel{{
-		ID:      7,
-		SiteURL: "https://api.example.test",
+		ID:             7,
+		SiteURL:        "https://api.example.test",
+		MonitorEnabled: true,
 	}}}
 	keys := &fakeKeys{
 		items: map[uint][]connector.APIKey{
@@ -281,8 +283,9 @@ func TestMatcherUsesSameOriginKeyAcrossURLPath(t *testing.T) {
 
 func TestMatcherRejectsSameKeyOnDifferentOrigin(t *testing.T) {
 	channels := &fakeChannels{items: []storage.Channel{{
-		ID:      7,
-		SiteURL: "https://first.example.test",
+		ID:             7,
+		SiteURL:        "https://first.example.test",
+		MonitorEnabled: true,
 	}}}
 	keys := &fakeKeys{
 		items:    map[uint][]connector.APIKey{7: {{ID: 11, GroupRatio: 0.05}}},
@@ -301,8 +304,9 @@ func TestMatcherRejectsSameKeyOnDifferentOrigin(t *testing.T) {
 
 func TestMatcherDoesNotFallbackToURLWithoutKeyFingerprint(t *testing.T) {
 	channels := &fakeChannels{items: []storage.Channel{{
-		ID:      7,
-		SiteURL: "https://api.example.test/v1",
+		ID:             7,
+		SiteURL:        "https://api.example.test/v1",
+		MonitorEnabled: true,
 	}}}
 	keys := &fakeKeys{
 		items: map[uint][]connector.APIKey{
@@ -336,6 +340,28 @@ func TestMatcherDoesNotFallbackToURLWithoutKeyFingerprint(t *testing.T) {
 	}
 	if matches[1].status != "fingerprint_missing" || matches[1].matched {
 		t.Fatalf("key-less account changed after URL candidates changed: %#v", matches[1])
+	}
+}
+
+func TestMatcherIgnoresDisabledChannels(t *testing.T) {
+	channels := &fakeChannels{items: []storage.Channel{{
+		ID:             7,
+		SiteURL:        "https://api.example.test/v1",
+		MonitorEnabled: false,
+		LastBalance:    floatPtr(50),
+	}}}
+	keys := &fakeKeys{
+		items:    map[uint][]connector.APIKey{7: {{ID: 11, GroupRatio: 0.05}}},
+		revealed: map[string]string{"7:11": "matching-key"},
+	}
+	matches, err := newMatcher(channels, keys).matchAccounts(context.Background(), []sub2api.PoolAccount{
+		poolAccount(1, "https://api.example.test/v1", "matching-key", 10),
+	})
+	if err != nil {
+		t.Fatalf("match accounts: %v", err)
+	}
+	if matches[1].status != "key_mismatch" || matches[1].matched || matches[1].rate != nil || matches[1].balance != nil {
+		t.Fatalf("disabled channel affected matcher: %#v", matches[1])
 	}
 }
 
@@ -384,8 +410,8 @@ func TestPriorityPreviewReservesUnmanagedAccountPriority(t *testing.T) {
 
 func TestMatcherTreatsConflictingExactKeyCandidatesAsAmbiguous(t *testing.T) {
 	channels := &fakeChannels{items: []storage.Channel{
-		{ID: 1, SiteURL: "https://api.example.test/v1", LastBalance: floatPtr(50)},
-		{ID: 2, SiteURL: "https://api.example.test/v1", LastBalance: floatPtr(50)},
+		{ID: 1, SiteURL: "https://api.example.test/v1", MonitorEnabled: true, LastBalance: floatPtr(50)},
+		{ID: 2, SiteURL: "https://api.example.test/v1", MonitorEnabled: true, LastBalance: floatPtr(50)},
 	}}
 	keys := &fakeKeys{
 		items: map[uint][]connector.APIKey{
@@ -410,8 +436,9 @@ func TestMatcherTreatsConflictingExactKeyCandidatesAsAmbiguous(t *testing.T) {
 
 func TestMatcherReportsUnavailableWhenKeyRevealFails(t *testing.T) {
 	channels := &fakeChannels{items: []storage.Channel{{
-		ID:      1,
-		SiteURL: "https://api.example.test/v1",
+		ID:             1,
+		SiteURL:        "https://api.example.test/v1",
+		MonitorEnabled: true,
 	}}}
 	keys := &fakeKeys{
 		items:    map[uint][]connector.APIKey{1: {{ID: 11, GroupRatio: 0.05}}},
@@ -436,8 +463,9 @@ func TestMatcherLoadsChannelsConcurrentlyWithBoundedWorkers(t *testing.T) {
 	for id := 1; id <= channelCount; id++ {
 		channelID := uint(id)
 		channels = append(channels, storage.Channel{
-			ID:      channelID,
-			SiteURL: fmt.Sprintf("https://channel-%d.example.test", id),
+			ID:             channelID,
+			SiteURL:        fmt.Sprintf("https://channel-%d.example.test", id),
+			MonitorEnabled: true,
 		})
 		items[channelID] = []connector.APIKey{{ID: int64(id), GroupRatio: 0.05}}
 		revealed[keyIDKey(channelID, int64(id))] = fmt.Sprintf("key-%d", id)
@@ -1596,10 +1624,11 @@ func newTestServiceWithState(
 		cipher,
 		admin,
 		&fakeChannels{items: []storage.Channel{{
-			ID:          1,
-			SiteURL:     "https://api.example.test/v1",
-			LastBalance: floatPtr(50),
-			TodayCost:   floatPtr(1.5),
+			ID:             1,
+			SiteURL:        "https://api.example.test/v1",
+			MonitorEnabled: true,
+			LastBalance:    floatPtr(50),
+			TodayCost:      floatPtr(1.5),
 		}}},
 		keys,
 		state,

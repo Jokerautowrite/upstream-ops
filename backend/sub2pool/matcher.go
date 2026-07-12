@@ -41,9 +41,10 @@ type matcher struct {
 const matcherChannelWorkerLimit = 4
 
 type channelCandidateResult struct {
-	normalized string
-	candidates map[string][]upstreamCandidate
-	err        error
+	normalized   string
+	candidates   map[string][]upstreamCandidate
+	urlCandidate upstreamCandidate
+	err          error
 }
 
 func newMatcher(channels ChannelStore, keys ChannelKeyReader) *matcher {
@@ -68,9 +69,11 @@ func (m *matcher) matchAccounts(ctx context.Context, accounts []sub2api.PoolAcco
 	if err != nil {
 		return nil, err
 	}
+	channels = filterMonitorEnabledChannels(channels)
 	sort.Slice(channels, func(i, j int) bool { return channels[i].ID < channels[j].ID })
 
 	byURLKey := map[string]map[string][]upstreamCandidate{}
+	byURL := map[string][]upstreamCandidate{}
 	unavailableURLs := map[string]struct{}{}
 	jobs := make(chan storage.Channel)
 	results := make(chan channelCandidateResult, len(channels))
@@ -87,9 +90,10 @@ func (m *matcher) matchAccounts(ctx context.Context, accounts []sub2api.PoolAcco
 				}
 				candidates, candidateErr := m.channelCandidates(ctx, channel)
 				results <- channelCandidateResult{
-					normalized: normalized,
-					candidates: candidates,
-					err:        candidateErr,
+					normalized:   normalized,
+					candidates:   candidates,
+					urlCandidate: urlCandidate(channel, normalized),
+					err:          candidateErr,
 				}
 			}
 		}()
@@ -114,6 +118,7 @@ func (m *matcher) matchAccounts(ctx context.Context, accounts []sub2api.PoolAcco
 			unavailableURLs[result.normalized] = struct{}{}
 			continue
 		}
+		byURL[result.normalized] = append(byURL[result.normalized], result.urlCandidate)
 		for keyHash, keyCandidates := range result.candidates {
 			if byURLKey[result.normalized] == nil {
 				byURLKey[result.normalized] = map[string][]upstreamCandidate{}
@@ -151,7 +156,8 @@ func (m *matcher) matchAccounts(ctx context.Context, accounts []sub2api.PoolAcco
 				}
 			} else {
 				// A complete fingerprint that does not match must never fall
-				// back to URL or name matching.
+				// back to URL or name matching for its multiplier. A unique
+				// monitored URL may still provide a site-level balance.
 				if _, unavailable := unavailableURLs[normalized]; unavailable {
 					match = upstreamMatch{
 						status:         "upstream_unavailable",
@@ -166,13 +172,36 @@ func (m *matcher) matchAccounts(ctx context.Context, accounts []sub2api.PoolAcco
 					}
 				}
 			}
+			match = withURLBalance(match, byURL[normalized])
 			result[account.Account.ID] = match
 			continue
 		}
-		match = upstreamMatch{status: "fingerprint_missing", fingerprint: state}
+		match = withURLBalance(
+			upstreamMatch{status: "fingerprint_missing", fingerprint: state},
+			byURL[normalized],
+		)
 		result[account.Account.ID] = match
 	}
 	return result, nil
+}
+
+func filterMonitorEnabledChannels(channels []storage.Channel) []storage.Channel {
+	out := make([]storage.Channel, 0, len(channels))
+	for _, channel := range channels {
+		if channel.MonitorEnabled {
+			out = append(out, channel)
+		}
+	}
+	return out
+}
+
+func urlCandidate(channel storage.Channel, normalized string) upstreamCandidate {
+	return upstreamCandidate{
+		channelID:     channel.ID,
+		normalizedURL: normalized,
+		balance:       cloneFloat(channel.LastBalance),
+		todayCost:     cloneFloat(channel.TodayCost),
+	}
 }
 
 func uniqueKeyCandidate(candidates []upstreamCandidate) (upstreamCandidate, bool) {
@@ -189,6 +218,33 @@ func uniqueKeyCandidate(candidates []upstreamCandidate) (upstreamCandidate, bool
 		}
 	}
 	return first, true
+}
+
+func uniqueURLCandidate(candidates []upstreamCandidate) (upstreamCandidate, bool) {
+	if len(candidates) == 0 {
+		return upstreamCandidate{}, false
+	}
+	first := candidates[0]
+	for _, candidate := range candidates[1:] {
+		if !equalFloatPointers(first.balance, candidate.balance) ||
+			!equalFloatPointers(first.todayCost, candidate.todayCost) {
+			return upstreamCandidate{}, false
+		}
+	}
+	return first, true
+}
+
+func withURLBalance(match upstreamMatch, candidates []upstreamCandidate) upstreamMatch {
+	if match.balance != nil {
+		return match
+	}
+	candidate, unique := uniqueURLCandidate(candidates)
+	if !unique {
+		return match
+	}
+	match.balance = cloneFloat(candidate.balance)
+	match.todayCost = cloneFloat(candidate.todayCost)
+	return match
 }
 
 func makeExactMatch(candidate upstreamCandidate, fingerprint string) upstreamMatch {

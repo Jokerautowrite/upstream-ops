@@ -6,6 +6,8 @@ func TestConfigFromEnvDefaultsAndOverrides(t *testing.T) {
 	t.Setenv(envMinimumAccountCount, "")
 	t.Setenv(envMaximumChanges, "")
 	t.Setenv(envLowBalanceThreshold, "")
+	t.Setenv(envAccountRateMapImportPath, "")
+	t.Setenv(envAccountRateMapImportTargetID, "")
 	cfg, err := ConfigFromEnv()
 	if err != nil {
 		t.Fatalf("defaults: %v", err)
@@ -27,8 +29,33 @@ func TestConfigFromEnvDefaultsAndOverrides(t *testing.T) {
 }
 
 func TestConfigFromEnvRejectsInvalidValues(t *testing.T) {
+	t.Setenv(envAccountRateMapImportPath, "")
+	t.Setenv(envAccountRateMapImportTargetID, "")
 	t.Setenv(envMinimumAccountCount, "0")
 	if _, err := ConfigFromEnv(); err == nil {
 		t.Fatal("invalid minimum account count was accepted")
+	}
+}
+
+func TestConfigFromEnvRequiresCompleteAccountRateMapImport(t *testing.T) {
+	t.Setenv(envMinimumAccountCount, "")
+	t.Setenv(envMaximumChanges, "")
+	t.Setenv(envLowBalanceThreshold, "")
+	t.Setenv(envAccountRateMapImportPath, "/app/data/legacy-map.json")
+	t.Setenv(envAccountRateMapImportTargetID, "")
+	if _, err := ConfigFromEnv(); err == nil {
+		t.Fatal("map import path without target id was accepted")
+	}
+
+	t.Setenv(envAccountRateMapImportPath, "")
+	t.Setenv(envAccountRateMapImportTargetID, "1")
+	if _, err := ConfigFromEnv(); err == nil {
+		t.Fatal("map import target id without path was accepted")
+	}
+
+	t.Setenv(envAccountRateMapImportPath, "/app/data/legacy-map.json")
+	t.Setenv(envAccountRateMapImportTargetID, "1")
+	if _, err := ConfigFromEnv(); err != nil {
+		t.Fatalf("complete map import config was rejected: %v", err)
 	}
 }

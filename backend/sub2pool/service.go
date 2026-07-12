@@ -14,15 +14,17 @@ import (
 )
 
 type Service struct {
-	targets    TargetStore
-	cipher     *crypto.Cipher
-	admin      AdminGateway
-	matcher    *matcher
-	state      StateStore
-	auto       AutomationStore
-	leases     LeaseStore
-	cfg        Config
-	leaseOwner string
+	targets             TargetStore
+	cipher              *crypto.Cipher
+	admin               AdminGateway
+	matcher             *matcher
+	accountRateMappings AccountRateMappingStore
+	rates               RateSnapshotStore
+	state               StateStore
+	auto                AutomationStore
+	leases              LeaseStore
+	cfg                 Config
+	leaseOwner          string
 
 	dispatcher EventDispatcher
 	locks      sync.Map
@@ -57,6 +59,11 @@ func New(
 
 func (s *Service) SetDispatcher(dispatcher EventDispatcher) {
 	s.dispatcher = dispatcher
+}
+
+func (s *Service) SetAccountRateMappingStore(store AccountRateMappingStore, rates RateSnapshotStore) {
+	s.accountRateMappings = store
+	s.rates = rates
 }
 
 func (s *Service) Snapshot(ctx context.Context, targetID uint) (*Snapshot, error) {
@@ -1147,6 +1154,18 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 			matches[account.Account.ID] = upstreamMatch{status: "upstream_unavailable", fingerprint: state}
 		}
 	}
+	var mappingChannels ChannelStore
+	if s.matcher != nil {
+		mappingChannels = s.matcher.channels
+	}
+	mappedRates := resolveAccountRateMappings(
+		ctx,
+		targetID,
+		accounts,
+		s.accountRateMappings,
+		mappingChannels,
+		s.rates,
+	)
 	for _, raw := range accounts {
 		account := raw.Account
 		if stats, exists := todayStats[account.ID]; exists {
@@ -1158,6 +1177,15 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 		lowest := lowestGroups(account.GroupIDs, groupByID)
 		channel := classifyLowestGroups(lowest)
 		match := matches[account.ID]
+		if match.rate == nil {
+			if mappedRate, exists := mappedRates[account.ID]; exists && allowsAccountRateMapping(match) {
+				match.rate = &mappedRate
+				if match.status == "fingerprint_missing" {
+					match.matched = true
+					match.status = "account_mapping"
+				}
+			}
+		}
 		fingerprintState := match.fingerprint
 		if fingerprintState == "" {
 			fingerprintState = "missing"
@@ -1242,6 +1270,10 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 		Healthy:         snapshot.Summary.HealthyCount,
 	}
 	return snapshot, nil
+}
+
+func allowsAccountRateMapping(match upstreamMatch) bool {
+	return match.status != "key_mismatch" && match.status != "key_ambiguous"
 }
 
 func lowestGroups(ids []int64, groups map[int64]GroupSnapshot) []GroupRef {

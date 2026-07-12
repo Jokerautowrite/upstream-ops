@@ -137,6 +137,17 @@ func main() {
 		log.Error("load Sub2 pool config failed", "err", err)
 		os.Exit(1)
 	}
+	if poolConfig.AccountRateMapImportPath != "" && poolConfig.AccountRateMapImportTargetID != 0 {
+		imported, err := poolState.ImportAccountRateMappingsIfEmpty(
+			poolConfig.AccountRateMapImportTargetID,
+			poolConfig.AccountRateMapImportPath,
+		)
+		if err != nil {
+			log.Error("import Sub2 pool account rate mappings failed", "err", err)
+			os.Exit(1)
+		}
+		log.Info("imported Sub2 pool account rate mappings", "count", imported)
+	}
 	poolSvc := sub2pool.New(
 		syncTargets,
 		cipher,
@@ -146,6 +157,7 @@ func main() {
 		poolState,
 		poolConfig,
 	)
+	poolSvc.SetAccountRateMappingStore(poolState, rates)
 	poolSvc.SetDispatcher(sub2pool.NewNotifyAdapter(dispatcher))
 	poolRunner := sub2pool.NewRunner(syncTargets, poolSvc, log)
 

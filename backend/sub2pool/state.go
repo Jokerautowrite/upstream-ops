@@ -112,6 +112,7 @@ func (s *GormStateStore) AutoMigrate() error {
 		&GormPoolRun{},
 		&GormPoolAutomation{},
 		&GormPoolLease{},
+		&GormPoolAccountRateMapping{},
 	)
 }
 
