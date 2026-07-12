@@ -72,6 +72,47 @@ func TestPreviewSignatureChangesWhenBalanceCrossesDebtBoundary(t *testing.T) {
 	}
 }
 
+func TestPreviewSignatureIgnoresUnmatchedReasonDrift(t *testing.T) {
+	before := Snapshot{
+		TargetID: 1,
+		Accounts: []AccountSnapshot{
+			priorityAccount(1, ChannelPLUS, 10, nil, nil),
+		},
+	}
+	before.Accounts[0].Availability.Matched = false
+	before.Accounts[0].MatchStatus = "upstream_unavailable"
+	after := before
+	after.Accounts = append([]AccountSnapshot(nil), before.Accounts...)
+	after.Accounts[0].MatchStatus = "key_mismatch"
+
+	beforePreview := buildPriorityPreview(before)
+	afterPreview := buildPriorityPreview(after)
+	if beforePreview.Signature != afterPreview.Signature {
+		t.Fatalf("unmatched reason drift changed signature: %s != %s", beforePreview.Signature, afterPreview.Signature)
+	}
+}
+
+func TestPreviewSignatureChangesWhenMatchAvailabilityChanges(t *testing.T) {
+	before := Snapshot{
+		TargetID: 1,
+		Accounts: []AccountSnapshot{
+			priorityAccount(1, ChannelPLUS, 10, nil, nil),
+		},
+	}
+	before.Accounts[0].Availability.Matched = false
+	before.Accounts[0].MatchStatus = "key_mismatch"
+	after := before
+	after.Accounts = append([]AccountSnapshot(nil), before.Accounts...)
+	after.Accounts[0].Availability.Matched = true
+	after.Accounts[0].MatchStatus = "key_exact"
+
+	beforePreview := buildPriorityPreview(before)
+	afterPreview := buildPriorityPreview(after)
+	if beforePreview.Signature == afterPreview.Signature {
+		t.Fatal("match availability change did not change signature")
+	}
+}
+
 func TestPriorityPreviewAvoidsCrossChannelCollisionsInSharedGroups(t *testing.T) {
 	kiro := priorityAccount(1, ChannelKiro, 90, floatPtr(0.05), floatPtr(20))
 	kiro.GroupIDs = []int64{1, 2}

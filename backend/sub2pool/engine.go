@@ -266,7 +266,7 @@ func previewSignature(snapshot Snapshot, proposals []PriorityProposal) string {
 		Channel         string   `json:"channel"`
 		UpstreamRate    *float64 `json:"upstream_rate,omitempty"`
 		BalanceState    string   `json:"balance_state"`
-		MatchStatus     string   `json:"match_status"`
+		Matched         bool     `json:"matched"`
 		IdentityDigest  string   `json:"identity_digest"`
 	}
 	accounts := make([]signatureAccount, 0, len(snapshot.Accounts))
@@ -284,7 +284,7 @@ func previewSignature(snapshot Snapshot, proposals []PriorityProposal) string {
 			Channel:         account.Channel,
 			UpstreamRate:    cloneFloat(account.UpstreamRate),
 			BalanceState:    balanceSignatureState(account.Balance),
-			MatchStatus:     account.MatchStatus,
+			Matched:         account.Availability.Matched,
 			IdentityDigest:  account.IdentityDigest,
 		})
 	}
