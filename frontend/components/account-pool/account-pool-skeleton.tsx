@@ -1,8 +1,19 @@
+import { LoaderCircle } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 
 export function AccountPoolSkeleton() {
   return (
     <div className="space-y-3">
+      <div className="flex items-start gap-3 rounded-lg border border-border bg-card px-4 py-3">
+        <LoaderCircle className="mt-0.5 size-4 shrink-0 animate-spin text-muted-foreground" />
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-foreground">正在读取 Sub2 账号池</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            正在核对账号、上游 Key、倍率和余额。首次加载可能需要十几秒，请保持当前页面。
+          </p>
+        </div>
+      </div>
+
       <div className="rounded-lg border border-border bg-card p-3 shadow-sm sm:p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-2">
@@ -39,4 +50,3 @@ export function AccountPoolSkeleton() {
     </div>
   )
 }
-

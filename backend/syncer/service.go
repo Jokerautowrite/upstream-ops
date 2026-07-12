@@ -997,6 +997,7 @@ func (s *Service) applyAccount(
 		action = "更新"
 		if before, ok := remoteBeforeByID[mapped.TargetAccountID]; ok {
 			previous = &before
+			preservePoolManagedPriority(syncGroup, &accountReq, &before)
 		}
 		account, err = client.UpdateAccount(ctx, adminTarget, mapped.TargetAccountID, accountReq)
 		if err != nil && !isHTTPNotFound(err) {
@@ -1020,6 +1021,7 @@ func (s *Service) applyAccount(
 		if existing != nil {
 			before := *existing
 			previous = &before
+			preservePoolManagedPriority(syncGroup, &accountReq, &before)
 			if action == "创建" {
 				action = "复用更新"
 			} else {
@@ -1099,6 +1101,17 @@ func (s *Service) applyAccount(
 		Message:      msg,
 		Changes:      append(accountChangeDetails(syncAccount, previous, accountReq, account.ID), singleChange(testChange)...),
 	}, nil
+}
+
+func preservePoolManagedPriority(
+	syncGroup *storage.UpstreamSyncGroup,
+	request *sub2api.AdminAccount,
+	existing *sub2api.AdminAccount,
+) {
+	if syncGroup == nil || request == nil || existing == nil || !syncGroup.PoolModeEnabled {
+		return
+	}
+	request.Priority = existing.Priority
 }
 
 func (s *Service) testManagedTargetAccount(

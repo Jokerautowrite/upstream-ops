@@ -1335,6 +1335,61 @@ func TestApplySyncGroupResortsAccountsByLatestSourceGroupRate(t *testing.T) {
 	}
 }
 
+func TestApplyPoolModeSyncGroupPreservesExternallyManagedPriority(t *testing.T) {
+	srv, admin := newAdminServer(t)
+	defer srv.Close()
+	db := openSyncerTestDB(t)
+	ch := seedChannel(t, db)
+	sourceGroupID := int64(1)
+	fake := &fakeChannelService{
+		groups: []connector.APIKeyGroup{{ID: &sourceGroupID, Name: "source", Ratio: 0.1}},
+	}
+	svc := newTestService(t, db, fake)
+
+	target, err := svc.CreateTarget(context.Background(), TargetInput{Name: "target", BaseURL: srv.URL, AdminAPIKey: "admin-key", Enabled: true})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	groups, err := svc.SyncTargetGroups(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("sync groups: %v", err)
+	}
+	rule, err := svc.CreateSyncGroup(SyncGroupDTO{
+		NameTemplate:      "pool-priority-{同步分组ID}",
+		TargetID:          target.ID,
+		TargetGroupIDs:    []uint{groups[0].ID},
+		Platform:          "openai",
+		PoolModeEnabled:   true,
+		RateSortDirection: "asc",
+		Accounts: []SyncAccountDTO{{
+			SourceChannelID:  ch.ID,
+			SourceGroupID:    &sourceGroupID,
+			RateConvertMode:  "raw",
+			RateConvertValue: 1,
+			Weight:           1,
+			Enabled:          true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create sync group: %v", err)
+	}
+	if _, err := svc.ApplySyncGroup(context.Background(), rule.ID); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+
+	admin.accounts[10]["priority"] = float64(777)
+	fake.groups = []connector.APIKeyGroup{{ID: &sourceGroupID, Name: "source", Ratio: 0.2}}
+	if _, err := svc.ApplySyncGroup(context.Background(), rule.ID); err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	if admin.accounts[10]["priority"] != float64(777) {
+		t.Fatalf("priority = %#v, want externally managed value 777", admin.accounts[10]["priority"])
+	}
+	if admin.accounts[10]["rate_multiplier"] != float64(0.2) {
+		t.Fatalf("rate multiplier = %#v, want 0.2", admin.accounts[10]["rate_multiplier"])
+	}
+}
+
 func TestApplySyncGroupKeepsMissingSourceGroupAccountSlot(t *testing.T) {
 	srv, admin := newAdminServer(t)
 	defer srv.Close()

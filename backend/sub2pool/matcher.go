@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/bejix/upstream-ops/backend/connector"
 	"github.com/bejix/upstream-ops/backend/connector/sub2api"
@@ -37,6 +38,14 @@ type matcher struct {
 	keys     ChannelKeyReader
 }
 
+const matcherChannelWorkerLimit = 4
+
+type channelCandidateResult struct {
+	normalized string
+	candidates map[string][]upstreamCandidate
+	err        error
+}
+
 func newMatcher(channels ChannelStore, keys ChannelKeyReader) *matcher {
 	return &matcher{channels: channels, keys: keys}
 }
@@ -63,22 +72,54 @@ func (m *matcher) matchAccounts(ctx context.Context, accounts []sub2api.PoolAcco
 
 	byURLKey := map[string]map[string][]upstreamCandidate{}
 	unavailableURLs := map[string]struct{}{}
-	for _, channel := range channels {
-		normalized := normalizeURL(channel.SiteURL)
-		if normalized == "" {
-			continue
-		}
-		candidates, err := m.channelCandidates(ctx, channel)
-		if err != nil {
-			unavailableURLs[normalized] = struct{}{}
-			continue
-		}
-		for keyHash, keyCandidates := range candidates {
-			if byURLKey[normalized] == nil {
-				byURLKey[normalized] = map[string][]upstreamCandidate{}
+	jobs := make(chan storage.Channel)
+	results := make(chan channelCandidateResult, len(channels))
+	workerCount := min(matcherChannelWorkerLimit, len(channels))
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for channel := range jobs {
+				normalized := normalizeURL(channel.SiteURL)
+				if normalized == "" {
+					continue
+				}
+				candidates, candidateErr := m.channelCandidates(ctx, channel)
+				results <- channelCandidateResult{
+					normalized: normalized,
+					candidates: candidates,
+					err:        candidateErr,
+				}
 			}
-			byURLKey[normalized][keyHash] = append(
-				byURLKey[normalized][keyHash],
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, channel := range channels {
+			select {
+			case jobs <- channel:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+
+	for result := range results {
+		if result.err != nil {
+			unavailableURLs[result.normalized] = struct{}{}
+			continue
+		}
+		for keyHash, keyCandidates := range result.candidates {
+			if byURLKey[result.normalized] == nil {
+				byURLKey[result.normalized] = map[string][]upstreamCandidate{}
+			}
+			byURLKey[result.normalized][keyHash] = append(
+				byURLKey[result.normalized][keyHash],
 				keyCandidates...,
 			)
 		}

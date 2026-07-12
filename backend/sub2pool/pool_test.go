@@ -428,6 +428,40 @@ func TestMatcherReportsUnavailableWhenKeyRevealFails(t *testing.T) {
 	}
 }
 
+func TestMatcherLoadsChannelsConcurrentlyWithBoundedWorkers(t *testing.T) {
+	const channelCount = 8
+	channels := make([]storage.Channel, 0, channelCount)
+	items := make(map[uint][]connector.APIKey, channelCount)
+	revealed := make(map[string]string, channelCount)
+	for id := 1; id <= channelCount; id++ {
+		channelID := uint(id)
+		channels = append(channels, storage.Channel{
+			ID:      channelID,
+			SiteURL: fmt.Sprintf("https://channel-%d.example.test", id),
+		})
+		items[channelID] = []connector.APIKey{{ID: int64(id), GroupRatio: 0.05}}
+		revealed[keyIDKey(channelID, int64(id))] = fmt.Sprintf("key-%d", id)
+	}
+	keys := &delayedKeys{
+		fakeKeys: fakeKeys{items: items, revealed: revealed},
+		delay:    20 * time.Millisecond,
+	}
+
+	_, err := newMatcher(&fakeChannels{items: channels}, keys).matchAccounts(
+		context.Background(),
+		[]sub2api.PoolAccount{poolAccount(1, "https://channel-1.example.test", "key-1", 10)},
+	)
+	if err != nil {
+		t.Fatalf("match accounts: %v", err)
+	}
+	if keys.maxActive < 2 {
+		t.Fatalf("max concurrent channel reads = %d, want at least 2", keys.maxActive)
+	}
+	if keys.maxActive > matcherChannelWorkerLimit {
+		t.Fatalf("max concurrent channel reads = %d, worker limit = %d", keys.maxActive, matcherChannelWorkerLimit)
+	}
+}
+
 func TestApplyRejectsChangedPreviewWithoutWriting(t *testing.T) {
 	service, admin := newTestService(t, []sub2api.PoolAccount{
 		poolAccount(1, "https://api.example.test/v1", "key-1", 90),
@@ -1317,6 +1351,34 @@ func (f *fakeKeys) RevealAPIKey(_ context.Context, channelID uint, keyID int64) 
 		return "", errors.New("missing key")
 	}
 	return value, nil
+}
+
+type delayedKeys struct {
+	fakeKeys
+	delay     time.Duration
+	mu        sync.Mutex
+	active    int
+	maxActive int
+}
+
+func (f *delayedKeys) ListAPIKeys(ctx context.Context, channelID uint, query connector.APIKeyQuery) (*connector.APIKeyPage, error) {
+	f.mu.Lock()
+	f.active++
+	if f.active > f.maxActive {
+		f.maxActive = f.active
+	}
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.active--
+		f.mu.Unlock()
+	}()
+	select {
+	case <-time.After(f.delay):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return f.fakeKeys.ListAPIKeys(ctx, channelID, query)
 }
 
 func keyIDKey(channelID uint, keyID int64) string {

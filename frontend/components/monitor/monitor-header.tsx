@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { useTheme } from "next-themes"
 import { Activity, Github, Home, LogOut, RefreshCw, Sun, Moon, Settings, UsersRound } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -19,6 +19,7 @@ import { toast } from "sonner"
 
 export function MonitorHeader() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { theme, setTheme } = useTheme()
   const { username, authDisabled, logout } = useAuth()
   const refresh = useTriggerRefresh()
@@ -190,13 +191,14 @@ export function MonitorHeader() {
           <Tooltip delayDuration={200}>
             <TooltipTrigger asChild>
               <Button
-                variant="outline"
-                size="icon"
+                variant={location.pathname === "/account-pool" ? "secondary" : "outline"}
+                size="sm"
                 onClick={() => navigate("/account-pool")}
-                className="size-8 border-border bg-background text-foreground hover:bg-muted"
+                className="h-8 gap-1.5 border-border px-2 text-foreground hover:bg-muted"
                 aria-label="Sub2 账号池"
               >
                 <UsersRound className="size-3.5" />
+                <span className="hidden lg:inline">账号池</span>
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">
