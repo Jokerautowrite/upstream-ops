@@ -1867,8 +1867,13 @@ func (s *Service) ensureSourceAPIKey(ctx context.Context, syncGroup *storage.Ups
 	unlimitedQuota := boolPtrIf(sourceChannel.Type == storage.ChannelTypeNewAPI)
 	neverExpire := int64PtrIf(sourceChannel.Type == storage.ChannelTypeNewAPI, -1)
 	var managedKeyID int64
+	var managed *storage.UpstreamSyncManagedAccount
 	if mapped, err := s.managedAccounts.FindByAccountID(syncAccount.ID); err == nil && mapped != nil && mapped.SourceAPIKeyID > 0 {
+		managed = mapped
 		managedKeyID = mapped.SourceAPIKeyID
+	}
+	if canReuseManagedSourceAPIKey(managed, syncAccount, keyName, existingSecret) {
+		return &connector.APIKey{ID: managedKeyID, Name: keyName}, strings.TrimSpace(existingSecret), nil
 	}
 	page, err := s.channelSvc.ListAPIKeys(ctx, syncAccount.SourceChannelID, connector.APIKeyQuery{
 		Page:     1,
@@ -1937,6 +1942,17 @@ func (s *Service) ensureSourceAPIKey(ctx context.Context, syncGroup *storage.Ups
 		return nil, "", err
 	}
 	return key, secret, nil
+}
+
+func canReuseManagedSourceAPIKey(managed *storage.UpstreamSyncManagedAccount, syncAccount *storage.UpstreamSyncAccount, keyName, existingSecret string) bool {
+	if managed == nil ||
+		managed.SourceAPIKeyID <= 0 ||
+		strings.TrimSpace(managed.SourceAPIKeyName) != keyName ||
+		strings.TrimSpace(existingSecret) == "" ||
+		managed.LastAppliedAt == nil {
+		return false
+	}
+	return !syncAccount.UpdatedAt.After(*managed.LastAppliedAt)
 }
 
 func sourceAPIKeyNeedsUpdate(key *connector.APIKey, keyName string, groupID *int64, groupName string, unlimitedQuota *bool, expiredTime *int64) bool {

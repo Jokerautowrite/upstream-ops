@@ -27,7 +27,9 @@ type fakeChannelService struct {
 	groups      []connector.APIKeyGroup
 	searchMiss  bool
 	uniqueKeys  bool
+	failList    bool
 	failReveal  bool
+	listCount   int
 	revealCount int
 	createCount int
 	updateCount int
@@ -86,6 +88,10 @@ func (f *fakeChannelService) DeleteAPIKey(ctx context.Context, channelID uint, k
 }
 
 func (f *fakeChannelService) ListAPIKeys(ctx context.Context, channelID uint, query connector.APIKeyQuery) (*connector.APIKeyPage, error) {
+	f.listCount++
+	if f.failList {
+		return nil, errors.New("list should not be called")
+	}
 	items := make([]connector.APIKey, 0, len(f.keys))
 	if query.Search != "" && f.searchMiss {
 		return &connector.APIKeyPage{Items: items, Total: 0, Page: 1, PageSize: 100}, nil
@@ -1303,9 +1309,14 @@ func TestApplySyncGroupCreatesDistinctSourceKeysForMultipleAccounts(t *testing.T
 	if fake.revealCount != 2 {
 		t.Fatalf("first apply reveal count = %d, want 2", fake.revealCount)
 	}
+	firstListCount := fake.listCount
+	fake.failList = true
 	fake.failReveal = true
 	if _, err := svc.ApplySyncGroup(context.Background(), rule.ID); err != nil {
 		t.Fatalf("second apply: %v", err)
+	}
+	if fake.listCount != firstListCount {
+		t.Fatalf("second apply list count = %d, want unchanged %d", fake.listCount, firstListCount)
 	}
 	if fake.revealCount != 2 {
 		t.Fatalf("second apply reveal count = %d, want unchanged", fake.revealCount)
@@ -1317,6 +1328,23 @@ func TestApplySyncGroupCreatesDistinctSourceKeysForMultipleAccounts(t *testing.T
 		if keyIDs[key.Name] != key.ID {
 			t.Fatalf("source key changed after second apply: %#v, first ids = %#v", fake.keys, keyIDs)
 		}
+	}
+}
+
+func TestCanReuseManagedSourceAPIKeyRequiresUnchangedSyncAccount(t *testing.T) {
+	appliedAt := time.Now()
+	syncAccount := &storage.UpstreamSyncAccount{UpdatedAt: appliedAt.Add(-time.Second)}
+	managed := &storage.UpstreamSyncManagedAccount{
+		SourceAPIKeyID:   9,
+		SourceAPIKeyName: "sync-1-账号1",
+		LastAppliedAt:    &appliedAt,
+	}
+	if !canReuseManagedSourceAPIKey(managed, syncAccount, "sync-1-账号1", "sk-existing") {
+		t.Fatal("unchanged managed source key should be reusable")
+	}
+	syncAccount.UpdatedAt = appliedAt.Add(time.Second)
+	if canReuseManagedSourceAPIKey(managed, syncAccount, "sync-1-账号1", "sk-existing") {
+		t.Fatal("updated sync account must refresh its source key configuration")
 	}
 }
 
