@@ -3,6 +3,7 @@ package runtimeconfig
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -103,6 +104,19 @@ func (m *Manager) AuthMiddleware() gin.HandlerFunc {
 		svc := m.CurrentAuth()
 		if svc == nil {
 			c.Next()
+			return
+		}
+		svc.Middleware()(c)
+	}
+}
+
+// RequiredAuthMiddleware protects control-plane modules that must never become
+// writable merely because the general dashboard is running in open mode.
+func (m *Manager) RequiredAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		svc := m.CurrentAuth()
+		if svc == nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "auth_required"})
 			return
 		}
 		svc.Middleware()(c)

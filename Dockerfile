@@ -33,7 +33,8 @@ WORKDIR /src
 
 # 先 go.mod / go.sum 走缓存
 COPY go.mod go.sum ./
-RUN go mod download
+ARG GOPROXY=https://proxy.golang.org,direct
+RUN GOPROXY="${GOPROXY}" go mod download
 
 # 然后整份源码
 COPY . ./

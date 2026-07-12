@@ -4,6 +4,7 @@ package scheduler
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/bejix/upstream-ops/backend/captcha"
@@ -27,11 +28,17 @@ type Scheduler struct {
 	captchas      *storage.Captchas
 	cipher        *crypto.Cipher
 	upstreamSync  upstreamSyncService
+	sub2Pool      sub2PoolService
 	proxy         config.ProxyConfig
+	rateRunMu     sync.Mutex
 }
 
 type upstreamSyncService interface {
 	SyncAllOnRateScan(ctx context.Context)
+}
+
+type sub2PoolService interface {
+	RunAllEnabled(ctx context.Context)
 }
 
 func New(
@@ -97,6 +104,10 @@ func (s *Scheduler) Stop() {
 	}
 }
 
+func (s *Scheduler) SetSub2Pool(service sub2PoolService) {
+	s.sub2Pool = service
+}
+
 func (s *Scheduler) runBalance() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -109,13 +120,26 @@ func (s *Scheduler) runBalance() {
 }
 
 func (s *Scheduler) runRates() {
+	if !s.rateRunMu.TryLock() {
+		if s.log != nil {
+			s.log.Warn("rate scan skipped because previous run is still active")
+		}
+		return
+	}
+	defer s.rateRunMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
 	if s.monitor != nil {
 		s.monitor.ScanAllRates(ctx)
 	}
 	if s.upstreamSync != nil {
 		s.upstreamSync.SyncAllOnRateScan(ctx)
+	}
+	cancel()
+	if s.sub2Pool != nil {
+		poolCtx, poolCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer poolCancel()
+		s.sub2Pool.RunAllEnabled(poolCtx)
 	}
 }
 

@@ -79,6 +79,15 @@ UpstreamOps focuses on these problems:
 - Enabled synchronization groups are reapplied after scheduled rate scans.
 - Synchronization group changes and apply results can trigger `upstream_sync_group_changed` notifications.
 
+### Sub2 Account Pool Operations (Fork Module)
+
+- Reuses the encrypted Sub2 target configured by Upstream Sync.
+- Only API-key accounts with `pool_mode=true` receive automatic priority proposals.
+- Priorities are unique per channel in steps of `10`; lower upstream rates come first and debt accounts come last.
+- Missing multiplier or balance data is skipped and reported without blocking other eligible accounts.
+- Rate changes and priority results are combined into one dedicated `sub2_pool_changed` notification.
+- See `docs/sub2-account-pool-module.md` for safety and upgrade details.
+
 ### Balance and Spending Monitoring
 
 - Shows total balance, today spending, total spending, lowest-balance channel, and abnormal channel count.

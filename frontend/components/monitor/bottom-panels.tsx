@@ -65,6 +65,7 @@ const eventMeta: Record<NotificationEvent, { icon: LucideIcon; cls: string }> = 
   subscription_monthly_remaining_low: { icon: AlertTriangle, cls: "text-warning" },
   subscription_expiring: { icon: Clock3, cls: "text-warning" },
   upstream_sync_group_changed: { icon: RefreshCw, cls: "text-brand" },
+  sub2_pool_changed: { icon: RefreshCw, cls: "text-brand" },
 }
 
 const FEED_PREVIEW_SIZE = 10

@@ -1,0 +1,257 @@
+package sub2pool
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"net"
+	"net/url"
+	"sort"
+	"strings"
+
+	"github.com/bejix/upstream-ops/backend/connector"
+	"github.com/bejix/upstream-ops/backend/connector/sub2api"
+	"github.com/bejix/upstream-ops/backend/storage"
+)
+
+type upstreamMatch struct {
+	status         string
+	rate           *float64
+	balance        *float64
+	todayCost      *float64
+	matched        bool
+	fingerprint    string
+	identityDigest string
+}
+
+type upstreamCandidate struct {
+	channelID     uint
+	normalizedURL string
+	rate          *float64
+	balance       *float64
+	todayCost     *float64
+}
+
+type matcher struct {
+	channels ChannelStore
+	keys     ChannelKeyReader
+}
+
+func newMatcher(channels ChannelStore, keys ChannelKeyReader) *matcher {
+	return &matcher{channels: channels, keys: keys}
+}
+
+func (m *matcher) matchAccounts(ctx context.Context, accounts []sub2api.PoolAccount) (map[int64]upstreamMatch, error) {
+	result := make(map[int64]upstreamMatch, len(accounts))
+	if m.channels == nil || m.keys == nil {
+		for _, account := range accounts {
+			identity := account.Identity()
+			state := "missing"
+			if identity.FingerprintSeen {
+				state = "present"
+			}
+			result[account.Account.ID] = upstreamMatch{status: "upstream_unavailable", fingerprint: state}
+		}
+		return result, nil
+	}
+
+	channels, err := m.channels.List()
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(channels, func(i, j int) bool { return channels[i].ID < channels[j].ID })
+
+	byURLKey := map[string]map[string][]upstreamCandidate{}
+	unavailableURLs := map[string]struct{}{}
+	for _, channel := range channels {
+		normalized := normalizeURL(channel.SiteURL)
+		if normalized == "" {
+			continue
+		}
+		candidates, err := m.channelCandidates(ctx, channel)
+		if err != nil {
+			unavailableURLs[normalized] = struct{}{}
+			continue
+		}
+		for keyHash, keyCandidates := range candidates {
+			if byURLKey[normalized] == nil {
+				byURLKey[normalized] = map[string][]upstreamCandidate{}
+			}
+			byURLKey[normalized][keyHash] = append(
+				byURLKey[normalized][keyHash],
+				keyCandidates...,
+			)
+		}
+	}
+
+	for _, account := range accounts {
+		identity := account.Identity()
+		normalized := normalizeURL(identity.BaseURL)
+		state := "missing"
+		if identity.FingerprintSeen {
+			state = "present"
+		}
+		match := upstreamMatch{status: "url_missing", fingerprint: state}
+		if normalized == "" {
+			result[account.Account.ID] = match
+			continue
+		}
+		if identity.FingerprintSeen {
+			match.identityDigest = identityDigest(normalized, identity.APIKeySHA256)
+			candidates := byURLKey[normalized][identity.APIKeySHA256]
+			if candidate, unique := uniqueKeyCandidate(candidates); unique {
+				match = makeExactMatch(candidate, state)
+				match.identityDigest = identityDigest(normalized, identity.APIKeySHA256)
+			} else if len(candidates) > 0 {
+				match = upstreamMatch{
+					status:         "key_ambiguous",
+					fingerprint:    state,
+					identityDigest: identityDigest(normalized, identity.APIKeySHA256),
+				}
+			} else {
+				// A complete fingerprint that does not match must never fall
+				// back to URL or name matching.
+				if _, unavailable := unavailableURLs[normalized]; unavailable {
+					match = upstreamMatch{
+						status:         "upstream_unavailable",
+						fingerprint:    state,
+						identityDigest: identityDigest(normalized, identity.APIKeySHA256),
+					}
+				} else {
+					match = upstreamMatch{
+						status:         "key_mismatch",
+						fingerprint:    state,
+						identityDigest: identityDigest(normalized, identity.APIKeySHA256),
+					}
+				}
+			}
+			result[account.Account.ID] = match
+			continue
+		}
+		match = upstreamMatch{status: "fingerprint_missing", fingerprint: state}
+		result[account.Account.ID] = match
+	}
+	return result, nil
+}
+
+func uniqueKeyCandidate(candidates []upstreamCandidate) (upstreamCandidate, bool) {
+	if len(candidates) == 0 {
+		return upstreamCandidate{}, false
+	}
+	first := candidates[0]
+	for _, candidate := range candidates[1:] {
+		if candidate.channelID != first.channelID ||
+			!equalFloatPointers(first.rate, candidate.rate) ||
+			!equalFloatPointers(first.balance, candidate.balance) ||
+			!equalFloatPointers(first.todayCost, candidate.todayCost) {
+			return upstreamCandidate{}, false
+		}
+	}
+	return first, true
+}
+
+func makeExactMatch(candidate upstreamCandidate, fingerprint string) upstreamMatch {
+	return upstreamMatch{
+		status:      "key_exact",
+		rate:        candidate.rate,
+		balance:     candidate.balance,
+		todayCost:   candidate.todayCost,
+		matched:     true,
+		fingerprint: fingerprint,
+	}
+}
+
+func (m *matcher) channelCandidates(ctx context.Context, channel storage.Channel) (map[string][]upstreamCandidate, error) {
+	const pageSize = 100
+	const maxPages = 1000
+
+	out := map[string][]upstreamCandidate{}
+	for page := 1; page <= maxPages; page++ {
+		keyPage, err := m.keys.ListAPIKeys(ctx, channel.ID, connector.APIKeyQuery{Page: page, PageSize: pageSize})
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range keyPage.Items {
+			rawKey, err := m.keys.RevealAPIKey(ctx, channel.ID, item.ID)
+			if err != nil {
+				return nil, err
+			}
+			hash := hashKey(rawKey)
+			rawKey = ""
+			if hash == "" {
+				continue
+			}
+			var rate *float64
+			if item.GroupRatio > 0 {
+				value := item.GroupRatio
+				rate = &value
+			}
+			out[hash] = append(out[hash], upstreamCandidate{
+				channelID:     channel.ID,
+				normalizedURL: normalizeURL(channel.SiteURL),
+				rate:          rate,
+				balance:       cloneFloat(channel.LastBalance),
+				todayCost:     cloneFloat(channel.TodayCost),
+			})
+		}
+		if keyPage.Pages <= page || len(keyPage.Items) < pageSize {
+			return out, nil
+		}
+	}
+	return nil, ErrUnavailable
+}
+
+func normalizeURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return ""
+	}
+	port := parsed.Port()
+	if port != "" && !((parsed.Scheme == "https" && port == "443") || (parsed.Scheme == "http" && port == "80")) {
+		host = net.JoinHostPort(host, port)
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + host
+}
+
+func identityDigest(normalizedURL, keySHA256 string) string {
+	normalizedURL = strings.TrimSpace(normalizedURL)
+	keySHA256 = strings.TrimSpace(keySHA256)
+	if normalizedURL == "" || keySHA256 == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(normalizedURL + "\x00" + keySHA256))
+	return hex.EncodeToString(sum[:])
+}
+
+func hashKey(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func cloneFloat(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}

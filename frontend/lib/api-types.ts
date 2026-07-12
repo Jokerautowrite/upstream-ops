@@ -41,6 +41,7 @@ export type NotificationEvent =
   | "subscription_monthly_remaining_low"
   | "subscription_expiring"
   | "upstream_sync_group_changed"
+  | "sub2_pool_changed"
 
 export interface Channel {
   id: number
@@ -310,6 +311,164 @@ export interface AppVersion {
 export interface ApplyConfigResult {
   applied_sections: string[]
   message: string
+}
+
+export interface Sub2PoolTarget {
+  id: string
+  name: string
+  description?: string
+  enabled?: boolean
+  account_count?: number
+  refreshed_at?: string | null
+}
+
+export interface Sub2PoolSnapshotSummary {
+  total_accounts: number
+  schedulable_accounts?: number
+  healthy_accounts?: number
+  debt_accounts?: number
+  missing_multiplier_accounts?: number
+  missing_data_accounts?: number
+}
+
+export interface Sub2PoolAccount {
+  id: number
+  name: string
+  platform: string
+  type: string
+  business_channel?: string | null
+  min_group?: string | null
+  current_priority?: number | null
+  suggested_priority?: number | null
+  upstream_multiplier?: number | null
+  balance?: number | null
+  balance_status?: string | null
+  health_status?: string | null
+  rate_limit_status?: string | null
+  schedulable?: boolean
+  schedulable_reason?: string | null
+  today_requests?: number | null
+  current_concurrency?: number | null
+  max_concurrency?: number | null
+  missing_data?: string[]
+  updated_at?: string | null
+}
+
+export interface Sub2PoolSnapshot {
+  target_id: string
+  target_name?: string
+  refreshed_at?: string | null
+  snapshot_signature?: string | null
+  summary?: Sub2PoolSnapshotSummary
+  accounts: Sub2PoolAccount[]
+}
+
+export interface Sub2PoolPriorityPreviewItem {
+  account_id: number
+  account_name: string
+  before_priority?: number | null
+  target_priority?: number | null
+  skip_reason?: string | null
+  multiplier_before?: number | null
+  multiplier_target?: number | null
+}
+
+export interface Sub2PoolPriorityPreviewSummary {
+  total: number
+  changed: number
+  skipped: number
+}
+
+export interface Sub2PoolGuardViolation {
+  code: string
+  message: string
+  count?: number
+}
+
+export interface Sub2PoolPriorityPreviewResponse {
+  target_id: string
+  snapshot_signature: string
+  snapshot_at?: string | null
+  items: Sub2PoolPriorityPreviewItem[]
+  summary?: Sub2PoolPriorityPreviewSummary
+  guards?: Sub2PoolGuardViolation[]
+}
+
+export interface Sub2PoolPriorityApplySummary {
+  priority_changes: number
+  multiplier_changes: number
+  skipped: number
+  combined_result?: string
+}
+
+export interface Sub2PoolPriorityApplyConflict {
+  expected_signature?: string
+  actual_signature?: string
+  message?: string
+}
+
+export interface Sub2PoolPriorityApplyResult {
+  target_id: string
+  snapshot_signature: string
+  applied_at?: string | null
+  message: string
+  summary?: Sub2PoolPriorityApplySummary
+  conflict?: Sub2PoolPriorityApplyConflict
+  applied?: Array<{
+    account_id: number
+    account_name: string
+    channel: string
+    before_priority: number
+    target_priority: number
+    after_priority?: number | null
+    status: string
+  }>
+  failed?: Array<{
+    account_id: number
+    account_name: string
+    channel: string
+    before_priority: number
+    target_priority: number
+    after_priority?: number | null
+    status: string
+  }>
+}
+
+export interface Sub2PoolSchedulableResult {
+  account_id: number
+  schedulable: boolean
+  message?: string
+  updated_at?: string | null
+  account?: Partial<Sub2PoolAccount>
+}
+
+export interface Sub2PoolAutomationLastResult {
+  at?: string | null
+  success?: boolean
+  summary?: string
+  priority_changes?: number
+  multiplier_changes?: number
+  skipped?: number
+  guard_blocked?: boolean
+  guard_reason?: string
+}
+
+export interface Sub2PoolAutomationStatus {
+  target_id: string
+  enabled: boolean
+  schedule?: string
+  last_run_at?: string | null
+  last_result?: Sub2PoolAutomationLastResult | null
+  guard_blocked?: boolean
+  guard_block_reasons?: string[]
+  updated_at?: string | null
+}
+
+export interface Sub2PoolAutomationUpdateResult {
+  enabled: boolean
+  message?: string
+  updated_at?: string | null
+  status?: Sub2PoolAutomationStatus
 }
 
 export interface ChannelRedeemResult {

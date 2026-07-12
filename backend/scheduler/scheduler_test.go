@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +21,24 @@ type fakeUpstreamSync struct {
 
 func (f *fakeUpstreamSync) SyncAllOnRateScan(ctx context.Context) {
 	f.called++
+}
+
+type blockingSub2Pool struct {
+	calls   atomic.Int32
+	started chan struct{}
+	release chan struct{}
+}
+
+func (f *blockingSub2Pool) RunAllEnabled(ctx context.Context) {
+	f.calls.Add(1)
+	select {
+	case f.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+	}
 }
 
 func openTestDB(t *testing.T) *gorm.DB {
@@ -169,5 +188,58 @@ func TestRunRatesTriggersUpstreamSync(t *testing.T) {
 
 	if syncSvc.called != 1 {
 		t.Fatalf("sync calls = %d, want 1", syncSvc.called)
+	}
+}
+
+func TestRunRatesSkipsOverlappingCycle(t *testing.T) {
+	pool := &blockingSub2Pool{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	s := New(
+		config.SchedulerConfig{},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		config.ProxyConfig{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	s.SetSub2Pool(pool)
+
+	done := make(chan struct{})
+	go func() {
+		s.runRates()
+		close(done)
+	}()
+	select {
+	case <-pool.started:
+	case <-time.After(time.Second):
+		t.Fatal("first pool run did not start")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		s.runRates()
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("overlapping rate run was not skipped")
+	}
+	if calls := pool.calls.Load(); calls != 1 {
+		t.Fatalf("pool calls = %d, want 1", calls)
+	}
+	close(pool.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("first pool run did not finish")
 	}
 }

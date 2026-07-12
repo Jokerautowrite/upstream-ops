@@ -15,6 +15,9 @@ import type {
   NotificationLogPage,
   RateChangeLogPage,
   RateSnapshot,
+  Sub2PoolAutomationStatus,
+  Sub2PoolSnapshot,
+  Sub2PoolTarget,
   SystemConfigResponse,
   UpstreamAnnouncementPage,
 } from "@/lib/api-types"
@@ -232,4 +235,22 @@ export function useCaptchaConfigs(enabled = true) {
 
 export function useSystemConfig() {
   return useApi<SystemConfigResponse>("/settings/config")
+}
+
+export function useSub2PoolTargets() {
+  return useApi<Sub2PoolTarget[]>("/sub2-pool/targets")
+}
+
+export function useSub2PoolSnapshot(targetID: string | null) {
+  return useApi<Sub2PoolSnapshot>(
+    targetID ? `/sub2-pool/targets/${encodeURIComponent(targetID)}/snapshot` : null,
+  )
+}
+
+export function useSub2PoolAutomation(targetID: string | null) {
+  const q = new URLSearchParams()
+  if (targetID) q.set("target_id", targetID)
+  return useApi<Sub2PoolAutomationStatus>(
+    targetID ? `/sub2-pool/automation?${q.toString()}` : null,
+  )
 }

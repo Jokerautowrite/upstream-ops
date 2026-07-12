@@ -16,6 +16,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/auth"
 	"github.com/bejix/upstream-ops/backend/channel"
 	"github.com/bejix/upstream-ops/backend/config"
+	"github.com/bejix/upstream-ops/backend/connector/sub2api"
 	"github.com/bejix/upstream-ops/backend/crypto"
 	"github.com/bejix/upstream-ops/backend/logger"
 	"github.com/bejix/upstream-ops/backend/monitor"
@@ -23,13 +24,13 @@ import (
 	"github.com/bejix/upstream-ops/backend/runtimeconfig"
 	"github.com/bejix/upstream-ops/backend/scheduler"
 	"github.com/bejix/upstream-ops/backend/storage"
+	"github.com/bejix/upstream-ops/backend/sub2pool"
 	"github.com/bejix/upstream-ops/backend/syncer"
 	"github.com/bejix/upstream-ops/web"
 	"github.com/gin-gonic/gin"
 
 	// 注册 connector 实现。
 	_ "github.com/bejix/upstream-ops/backend/connector/newapi"
-	_ "github.com/bejix/upstream-ops/backend/connector/sub2api"
 )
 
 func main() {
@@ -126,9 +127,32 @@ func main() {
 	monitorSvc := monitor.NewService(channels, announcements, rates, monLogs, channelSvc, dispatcher, log)
 	syncSvc := syncer.New(channels, rates, cipher, channelSvc, log, syncTargets, syncGroups, upstreamSyncGroups, upstreamSyncAccounts, managedSyncAccounts, syncLogs)
 	syncSvc.SetDispatcher(dispatcher)
+	poolState := sub2pool.NewGormStateStore(db)
+	if err := poolState.AutoMigrate(); err != nil {
+		log.Error("migrate Sub2 pool state failed", "err", err)
+		os.Exit(1)
+	}
+	poolConfig, err := sub2pool.ConfigFromEnv()
+	if err != nil {
+		log.Error("load Sub2 pool config failed", "err", err)
+		os.Exit(1)
+	}
+	poolSvc := sub2pool.New(
+		syncTargets,
+		cipher,
+		sub2api.NewAdminClient(),
+		channels,
+		channelSvc,
+		poolState,
+		poolConfig,
+	)
+	poolSvc.SetDispatcher(sub2pool.NewNotifyAdapter(dispatcher))
+	poolRunner := sub2pool.NewRunner(syncTargets, poolSvc, log)
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
-		return scheduler.New(scfg, monitorSvc, monLogs, syncLogs, rates, notifies, announcements, captchas, cipher, syncSvc, pcfg, log)
+		scheduled := scheduler.New(scfg, monitorSvc, monLogs, syncLogs, rates, notifies, announcements, captchas, cipher, syncSvc, pcfg, log)
+		scheduled.SetSub2Pool(poolRunner)
+		return scheduled
 	}
 	sch := schedulerFactory(cfg.Scheduler, cfg.Proxy)
 	if err := sch.Start(); err != nil {
@@ -185,6 +209,9 @@ func main() {
 		Log:           log,
 		Frontend:      frontendFS,
 	})
+	poolAPI := router.Group("/api")
+	poolAPI.Use(runtimeMgr.RequiredAuthMiddleware())
+	api.RegisterSub2Pool(poolAPI, poolSvc, syncTargets)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),

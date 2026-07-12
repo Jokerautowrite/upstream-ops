@@ -230,6 +230,7 @@ const (
 	EventSubscriptionMonthlyLow   NotificationEvent = "subscription_monthly_remaining_low"
 	EventSubscriptionExpiring     NotificationEvent = "subscription_expiring"
 	EventUpstreamSyncGroupChanged NotificationEvent = "upstream_sync_group_changed"
+	EventSub2PoolChanged          NotificationEvent = "sub2_pool_changed"
 )
 
 // NotificationLog 通知发送记录。

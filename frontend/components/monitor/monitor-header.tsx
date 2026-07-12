@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useTheme } from "next-themes"
-import { Activity, Github, Home, LogOut, RefreshCw, Sun, Moon, Settings } from "lucide-react"
+import { Activity, Github, Home, LogOut, RefreshCw, Sun, Moon, Settings, UsersRound } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -184,6 +184,23 @@ export function MonitorHeader() {
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">
               {"主页"}
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip delayDuration={200}>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => navigate("/account-pool")}
+                className="size-8 border-border bg-background text-foreground hover:bg-muted"
+                aria-label="Sub2 账号池"
+              >
+                <UsersRound className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              {"Sub2 账号池"}
             </TooltipContent>
           </Tooltip>
 

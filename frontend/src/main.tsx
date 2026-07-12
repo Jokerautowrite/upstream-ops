@@ -14,6 +14,7 @@ import DashboardPage from '@/app/page'
 import CaptchaPage from '@/app/captcha-page'
 import NotificationsPage from '@/app/notifications-page'
 import SettingsPage from '@/app/settings-page'
+import AccountPoolPage from '@/app/account-pool-page'
 import '@/app/globals.css'
 
 createRoot(document.getElementById('root')!).render(
@@ -29,6 +30,7 @@ createRoot(document.getElementById('root')!).render(
                     <Route index element={<DashboardPage />} />
                     <Route path="captcha" element={<CaptchaPage />} />
                     <Route path="notifications" element={<NotificationsPage />} />
+                    <Route path="account-pool" element={<AccountPoolPage />} />
                     <Route path="settings" element={<SettingsPage />} />
                   </Route>
                 </Routes>
