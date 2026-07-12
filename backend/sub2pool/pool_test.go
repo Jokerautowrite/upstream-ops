@@ -36,6 +36,62 @@ func TestPriorityPreviewAssignsUniquePrioritiesForEqualRates(t *testing.T) {
 	}
 }
 
+func TestPriorityTransitionAllowsPreexistingDuplicatesOutsideIntent(t *testing.T) {
+	first := priorityAccount(1, ChannelPLUS, 100, nil, floatPtr(20))
+	second := priorityAccount(2, ChannelPLUS, 100, nil, floatPtr(20))
+	changing := priorityAccount(3, ChannelPLUS, 90, floatPtr(0.05), floatPtr(20))
+	changing.Status = "active"
+	changing.IdentityDigest = "identity-3"
+	proposal := PriorityProposal{
+		AccountID:              changing.ID,
+		CurrentPriority:        changing.CurrentPriority,
+		TargetPriority:         10,
+		Channel:                changing.Channel,
+		expectedGroupIDs:       append([]int64(nil), changing.GroupIDs...),
+		expectedStatus:         changing.Status,
+		expectedPoolManaged:    changing.PoolManaged,
+		expectedIdentityDigest: changing.IdentityDigest,
+	}
+
+	intent, err := preparePriorityTransitionIntent(
+		[]AccountSnapshot{first, second, changing},
+		[]PriorityProposal{proposal},
+	)
+	if err != nil {
+		t.Fatalf("preexisting duplicates blocked an isolated transition: %v", err)
+	}
+	if len(intent) != 1 || intent[0].stagingPriority <= 100 {
+		t.Fatalf("intent = %#v", intent)
+	}
+	if err := validatePriorityTransitionIntent([]AccountSnapshot{first, second, changing}, intent); err != nil {
+		t.Fatalf("persisted intent rejected preexisting duplicates: %v", err)
+	}
+}
+
+func TestPriorityTransitionRejectsTargetCollisionWithUnchangedAccount(t *testing.T) {
+	unchanged := priorityAccount(1, ChannelPLUS, 20, nil, floatPtr(20))
+	changing := priorityAccount(2, ChannelPLUS, 90, floatPtr(0.05), floatPtr(20))
+	changing.Status = "active"
+	changing.IdentityDigest = "identity-2"
+	proposal := PriorityProposal{
+		AccountID:              changing.ID,
+		CurrentPriority:        changing.CurrentPriority,
+		TargetPriority:         unchanged.CurrentPriority,
+		Channel:                changing.Channel,
+		expectedGroupIDs:       append([]int64(nil), changing.GroupIDs...),
+		expectedStatus:         changing.Status,
+		expectedPoolManaged:    changing.PoolManaged,
+		expectedIdentityDigest: changing.IdentityDigest,
+	}
+
+	if _, err := preparePriorityTransitionIntent(
+		[]AccountSnapshot{unchanged, changing},
+		[]PriorityProposal{proposal},
+	); err == nil {
+		t.Fatal("target collision with unchanged account was accepted")
+	}
+}
+
 func TestPreviewSignatureIgnoresFundedBalanceDrift(t *testing.T) {
 	before := Snapshot{
 		TargetID: 1,

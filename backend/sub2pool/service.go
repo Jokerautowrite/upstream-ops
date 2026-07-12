@@ -883,9 +883,6 @@ func preparePriorityTransitionIntent(
 	if len(changes) == 0 {
 		return nil, nil
 	}
-	if !uniqueCurrentPriorities(accounts) {
-		return nil, errors.New("remote priority scope is already ambiguous")
-	}
 	accountByID := make(map[int64]AccountSnapshot, len(accounts))
 	ceiling := 0
 	for _, account := range accounts {
@@ -916,6 +913,9 @@ func preparePriorityTransitionIntent(
 			return nil, errors.New("transition account does not match snapshot")
 		}
 		ceiling = max(ceiling, proposal.TargetPriority)
+	}
+	if err := validateTransitionTargets(accounts, intent); err != nil {
+		return nil, err
 	}
 	maxInt := int(^uint(0) >> 1)
 	if len(intent) > maxInt/priorityStagingStep {
@@ -980,9 +980,6 @@ func priorityIntentStateFor(accounts []AccountSnapshot, intent []PriorityProposa
 }
 
 func validatePriorityTransitionIntent(accounts []AccountSnapshot, intent []PriorityProposal) error {
-	if !uniqueCurrentPriorities(accounts) {
-		return errors.New("remote priority scope is already ambiguous")
-	}
 	accountsByID := make(map[int64]AccountSnapshot, len(accounts))
 	intentByAccountID := make(map[int64]PriorityProposal, len(intent))
 	ceiling := 0
@@ -1008,6 +1005,9 @@ func validatePriorityTransitionIntent(accounts []AccountSnapshot, intent []Prior
 		intentByAccountID[proposal.AccountID] = proposal
 		ceiling = max(ceiling, proposal.CurrentPriority, proposal.TargetPriority)
 	}
+	if err := validateTransitionTargets(accounts, intent); err != nil {
+		return err
+	}
 	for _, account := range accounts {
 		if _, planned := intentByAccountID[account.ID]; !planned {
 			ceiling = max(ceiling, account.CurrentPriority)
@@ -1026,38 +1026,46 @@ func validatePriorityTransitionIntent(accounts []AccountSnapshot, intent []Prior
 	return nil
 }
 
+func validateTransitionTargets(accounts []AccountSnapshot, intent []PriorityProposal) error {
+	accountByID := make(map[int64]AccountSnapshot, len(accounts))
+	targetByID := make(map[int64]int, len(intent))
+	for _, account := range accounts {
+		accountByID[account.ID] = account
+	}
+	for _, proposal := range intent {
+		targetByID[proposal.AccountID] = proposal.TargetPriority
+	}
+	for _, proposal := range intent {
+		account, exists := accountByID[proposal.AccountID]
+		if !exists {
+			return errors.New("transition account missing")
+		}
+		accountGroups := int64Set(account.GroupIDs)
+		for _, other := range accounts {
+			if other.ID == account.ID || !other.Schedulable {
+				continue
+			}
+			otherPriority := other.CurrentPriority
+			if target, changing := targetByID[other.ID]; changing {
+				otherPriority = target
+			}
+			if otherPriority <= 0 || otherPriority != proposal.TargetPriority {
+				continue
+			}
+			if other.Channel == account.Channel || sharesGroup(accountGroups, other.GroupIDs) {
+				return errors.New("transition target collides with a schedulable account")
+			}
+		}
+	}
+	return nil
+}
+
 func sortedPriorityIntent(intent []PriorityProposal) []PriorityProposal {
 	out := append([]PriorityProposal(nil), intent...)
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].AccountID < out[j].AccountID
 	})
 	return out
-}
-
-func uniqueCurrentPriorities(accounts []AccountSnapshot) bool {
-	seenChannels := make(map[string]struct{}, len(accounts))
-	seenGroups := make(map[string]struct{}, len(accounts))
-	for _, account := range accounts {
-		if account.CurrentPriority <= 0 {
-			continue
-		}
-		channelKey := fmt.Sprintf("%s:%d", account.Channel, account.CurrentPriority)
-		if _, exists := seenChannels[channelKey]; exists {
-			return false
-		}
-		seenChannels[channelKey] = struct{}{}
-		for _, groupID := range account.GroupIDs {
-			if groupID <= 0 {
-				continue
-			}
-			groupKey := fmt.Sprintf("%d:%d", groupID, account.CurrentPriority)
-			if _, exists := seenGroups[groupKey]; exists {
-				return false
-			}
-			seenGroups[groupKey] = struct{}{}
-		}
-	}
-	return true
 }
 
 func equalInt64Sets(left, right []int64) bool {
