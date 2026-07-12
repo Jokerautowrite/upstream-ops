@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,6 +27,8 @@ type fakeChannelService struct {
 	groups      []connector.APIKeyGroup
 	searchMiss  bool
 	uniqueKeys  bool
+	failReveal  bool
+	revealCount int
 	createCount int
 	updateCount int
 	deleteCount int
@@ -34,6 +37,10 @@ type fakeChannelService struct {
 }
 
 func (f *fakeChannelService) RevealAPIKey(ctx context.Context, channelID uint, keyID int64) (string, error) {
+	f.revealCount++
+	if f.failReveal {
+		return "", errors.New("reveal should not be called")
+	}
 	for _, key := range f.keys {
 		if key.ID == keyID {
 			return key.Key, nil
@@ -554,7 +561,7 @@ func TestEnsureSourceAPIKeySetsNewAPIDefaults(t *testing.T) {
 		SourceGroupName: "Codex Plus",
 	}
 
-	if _, _, err := svc.ensureSourceAPIKey(context.Background(), syncGroup, syncAccount, syncGroup.Name); err != nil {
+	if _, _, err := svc.ensureSourceAPIKey(context.Background(), syncGroup, syncAccount, syncGroup.Name, ""); err != nil {
 		t.Fatalf("create ensureSourceAPIKey: %v", err)
 	}
 	if fake.lastCreate.UnlimitedQuota == nil || !*fake.lastCreate.UnlimitedQuota {
@@ -564,7 +571,7 @@ func TestEnsureSourceAPIKeySetsNewAPIDefaults(t *testing.T) {
 		t.Fatalf("create expired_time = %#v", fake.lastCreate.ExpiredTime)
 	}
 
-	if _, _, err := svc.ensureSourceAPIKey(context.Background(), syncGroup, syncAccount, syncGroup.Name); err != nil {
+	if _, _, err := svc.ensureSourceAPIKey(context.Background(), syncGroup, syncAccount, syncGroup.Name, ""); err != nil {
 		t.Fatalf("update ensureSourceAPIKey: %v", err)
 	}
 	if fake.lastUpdate.UnlimitedQuota == nil || !*fake.lastUpdate.UnlimitedQuota {
@@ -594,7 +601,7 @@ func TestEnsureSourceAPIKeyFallsBackToFullListWhenSearchMisses(t *testing.T) {
 		SourceGroupName: "Codex Plus",
 	}
 
-	key, secret, err := svc.ensureSourceAPIKey(context.Background(), syncGroup, syncAccount, syncGroup.Name)
+	key, secret, err := svc.ensureSourceAPIKey(context.Background(), syncGroup, syncAccount, syncGroup.Name, "")
 	if err != nil {
 		t.Fatalf("ensureSourceAPIKey: %v", err)
 	}
@@ -682,8 +689,8 @@ func TestApplySyncGroupCreatesThenUpdatesManagedAccount(t *testing.T) {
 	if len(logs) != 1 {
 		t.Fatalf("logs len = %d, want 1", len(logs))
 	}
-	if fake.createCount != 1 || fake.updateCount != 1 {
-		t.Fatalf("key create/update = %d/%d, want 1/1", fake.createCount, fake.updateCount)
+	if fake.createCount != 1 || fake.updateCount != 0 || fake.revealCount != 1 {
+		t.Fatalf("key create/update/reveal = %d/%d/%d, want 1/0/1", fake.createCount, fake.updateCount, fake.revealCount)
 	}
 	if fake.lastCreate.GroupID == nil || *fake.lastCreate.GroupID != sourceGroupID {
 		t.Fatalf("create group id = %#v", fake.lastCreate.GroupID)
@@ -1293,8 +1300,15 @@ func TestApplySyncGroupCreatesDistinctSourceKeysForMultipleAccounts(t *testing.T
 		t.Fatalf("managed source key mappings = %#v, keys = %#v", managedKeyIDs, keyIDs)
 	}
 
+	if fake.revealCount != 2 {
+		t.Fatalf("first apply reveal count = %d, want 2", fake.revealCount)
+	}
+	fake.failReveal = true
 	if _, err := svc.ApplySyncGroup(context.Background(), rule.ID); err != nil {
 		t.Fatalf("second apply: %v", err)
+	}
+	if fake.revealCount != 2 {
+		t.Fatalf("second apply reveal count = %d, want unchanged", fake.revealCount)
 	}
 	if fake.createCount != 2 || len(fake.keys) != 2 || admin.createCount != 2 {
 		t.Fatalf("second apply recreated source keys or accounts: keys=%d/%d accounts=%d", fake.createCount, len(fake.keys), admin.createCount)

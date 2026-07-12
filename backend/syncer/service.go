@@ -971,8 +971,16 @@ func (s *Service) applyAccount(
 	if err != nil {
 		return nil, err
 	}
+	var mapped *storage.UpstreamSyncManagedAccount
+	var previous *sub2api.AdminAccount
+	if found, findErr := s.managedAccounts.FindByAccountID(syncAccount.ID); findErr == nil && found != nil {
+		mapped = found
+		if before, ok := remoteBeforeByID[mapped.TargetAccountID]; ok {
+			previous = &before
+		}
+	}
 	keyName := managedObjectBaseName(syncGroup, syncAccount)
-	key, secret, err := s.ensureSourceAPIKey(ctx, syncGroup, syncAccount, keyName)
+	key, secret, err := s.ensureSourceAPIKey(ctx, syncGroup, syncAccount, keyName, adminAccountAPIKey(previous))
 	if err != nil {
 		return nil, err
 	}
@@ -990,15 +998,11 @@ func (s *Service) applyAccount(
 	accountReq.Name = accountName
 	accountReq.Notes = syncedAccountNotes(now)
 	var account *sub2api.AdminAccount
-	var mapped *storage.UpstreamSyncManagedAccount
-	var previous *sub2api.AdminAccount
 	action := "创建"
-	if found, err := s.managedAccounts.FindByAccountID(syncAccount.ID); err == nil && found != nil {
-		mapped = found
+	if mapped != nil {
 		action = "更新"
-		if before, ok := remoteBeforeByID[mapped.TargetAccountID]; ok {
-			previous = &before
-			preservePoolManagedPriority(syncGroup, &accountReq, &before)
+		if previous != nil {
+			preservePoolManagedPriority(syncGroup, &accountReq, previous)
 		}
 		account, err = client.UpdateAccount(ctx, adminTarget, mapped.TargetAccountID, accountReq)
 		if err != nil && !isHTTPNotFound(err) {
@@ -1855,7 +1859,7 @@ func (s *Service) selectedTargetGroups(syncGroup *storage.UpstreamSyncGroup) ([]
 	return all, selected, remoteIDs, nil
 }
 
-func (s *Service) ensureSourceAPIKey(ctx context.Context, syncGroup *storage.UpstreamSyncGroup, syncAccount *storage.UpstreamSyncAccount, keyName string) (*connector.APIKey, string, error) {
+func (s *Service) ensureSourceAPIKey(ctx context.Context, syncGroup *storage.UpstreamSyncGroup, syncAccount *storage.UpstreamSyncAccount, keyName, existingSecret string) (*connector.APIKey, string, error) {
 	sourceChannel, err := s.channels.FindByID(syncAccount.SourceChannelID)
 	if err != nil {
 		return nil, "", err
@@ -1897,19 +1901,21 @@ func (s *Service) ensureSourceAPIKey(ctx context.Context, syncGroup *storage.Ups
 		}
 	}
 	if key != nil {
-		name := keyName
 		groupName := strings.TrimSpace(syncAccount.SourceGroupName)
-		updated, err := s.channelSvc.UpdateAPIKey(ctx, syncAccount.SourceChannelID, key.ID, connector.APIKeyUpdateRequest{
-			Name:           &name,
-			Group:          stringPtrOrNil(groupName),
-			GroupID:        syncAccount.SourceGroupID,
-			UnlimitedQuota: unlimitedQuota,
-			ExpiredTime:    neverExpire,
-		})
-		if err != nil {
-			return nil, "", err
+		if sourceAPIKeyNeedsUpdate(key, keyName, syncAccount.SourceGroupID, groupName, unlimitedQuota, neverExpire) {
+			name := keyName
+			updated, err := s.channelSvc.UpdateAPIKey(ctx, syncAccount.SourceChannelID, key.ID, connector.APIKeyUpdateRequest{
+				Name:           &name,
+				Group:          stringPtrOrNil(groupName),
+				GroupID:        syncAccount.SourceGroupID,
+				UnlimitedQuota: unlimitedQuota,
+				ExpiredTime:    neverExpire,
+			})
+			if err != nil {
+				return nil, "", err
+			}
+			key = updated
 		}
-		key = updated
 	} else {
 		groupName := strings.TrimSpace(syncAccount.SourceGroupName)
 		key, err = s.channelSvc.CreateAPIKey(ctx, syncAccount.SourceChannelID, connector.APIKeyCreateRequest{
@@ -1923,11 +1929,41 @@ func (s *Service) ensureSourceAPIKey(ctx context.Context, syncGroup *storage.Ups
 			return nil, "", err
 		}
 	}
+	if managedKeyID > 0 && key.ID == managedKeyID && strings.TrimSpace(existingSecret) != "" {
+		return key, existingSecret, nil
+	}
 	secret, err := s.channelSvc.RevealAPIKey(ctx, syncAccount.SourceChannelID, key.ID)
 	if err != nil {
 		return nil, "", err
 	}
 	return key, secret, nil
+}
+
+func sourceAPIKeyNeedsUpdate(key *connector.APIKey, keyName string, groupID *int64, groupName string, unlimitedQuota *bool, expiredTime *int64) bool {
+	if key == nil || strings.TrimSpace(key.Name) != keyName {
+		return true
+	}
+	if groupID != nil && key.GroupID != nil {
+		if *key.GroupID != *groupID {
+			return true
+		}
+	} else if groupName != "" &&
+		!strings.EqualFold(strings.TrimSpace(key.Group), groupName) &&
+		!strings.EqualFold(strings.TrimSpace(key.GroupName), groupName) {
+		return true
+	}
+	if unlimitedQuota != nil && key.UnlimitedQuota != *unlimitedQuota {
+		return true
+	}
+	return expiredTime != nil && key.ExpiredTime != *expiredTime
+}
+
+func adminAccountAPIKey(account *sub2api.AdminAccount) string {
+	if account == nil || account.Credentials == nil {
+		return ""
+	}
+	value, _ := account.Credentials["api_key"].(string)
+	return strings.TrimSpace(value)
 }
 
 func findAPIKeyByName(items []connector.APIKey, name string) *connector.APIKey {
