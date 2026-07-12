@@ -93,6 +93,7 @@ export function AccountPoolSummaryStrip({
               variant="outline"
               size="sm"
               onClick={onRefresh}
+              disabled={loading || !selectedTargetID}
               className="w-full gap-1.5 sm:w-auto"
             >
               <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
@@ -100,7 +101,9 @@ export function AccountPoolSummaryStrip({
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            最近刷新：{dateTime(refreshedAt)}（{relativeTime(refreshedAt)}）
+            {refreshedAt
+              ? `数据更新时间：${dateTime(refreshedAt)}（${relativeTime(refreshedAt)}）`
+              : "尚未加载账号数据，点击刷新后读取最新快照"}
           </p>
         </div>
 
@@ -119,4 +122,3 @@ export function AccountPoolSummaryStrip({
     </section>
   )
 }
-

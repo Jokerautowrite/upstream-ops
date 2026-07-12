@@ -126,7 +126,7 @@ export function BalanceOverview() {
             </span>
           </span>
         </div>
-        <div className="h-64 min-h-0 w-full sm:h-72 lg:h-auto lg:flex-1">
+        <div className="h-64 w-full sm:h-72 lg:h-auto lg:min-h-36 lg:flex-1">
           {isLoading ? (
             <div className="flex h-full items-center justify-center text-xs text-muted-foreground">{"加载中…"}</div>
           ) : data.length === 0 ? (
@@ -190,7 +190,7 @@ export function BalanceOverview() {
 
         {/* per-channel chips */}
         {channels.length > 0 ? (
-          <div className="mt-3 flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-3">
+          <div className="mt-3 flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-3 lg:max-h-16 lg:overflow-y-auto lg:pr-1">
             {channels.map((c) => {
               const isFailed = !!c.last_error
               const isUnknown = c.last_balance == null

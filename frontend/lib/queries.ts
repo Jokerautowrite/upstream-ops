@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { apiFetch } from "@/lib/api"
 import { useRefreshTick } from "@/lib/refresh-context"
 import type {
@@ -45,6 +45,10 @@ interface CacheEntry {
 }
 const cache = new Map<string, CacheEntry>()
 const CACHE_TTL_MS = 800
+
+// 账号池快照开销明显高于普通查询。手动刷新后的结果保留在当前浏览器会话内，
+// 路由切换回来时直接复用，不因组件重新挂载再次请求后端。
+const manualCache = new Map<string, unknown>()
 
 function cacheKey(path: string, tick: number, bump: number) {
   return `${path}#${tick}#${bump}`
@@ -128,6 +132,82 @@ function useApi<T>(path: string | null, watchRefresh = true): QueryState<T> {
     setData: (nextData) => {
       hasDataRef.current = true
       setData(nextData)
+    },
+  }
+}
+
+function useManualApi<T>(path: string | null): QueryState<T> {
+  const [data, setDataState] = useState<T | null>(() => {
+    if (!path) return null
+    return (manualCache.get(path) as T | undefined) ?? null
+  })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const activePathRef = useRef(path)
+  const mountedRef = useRef(true)
+  const requestIDRef = useRef(0)
+
+  useEffect(() => {
+    mountedRef.current = true
+    activePathRef.current = path
+    requestIDRef.current += 1
+    setDataState(path ? ((manualCache.get(path) as T | undefined) ?? null) : null)
+    setError(null)
+    setLoading(false)
+  }, [path])
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+      requestIDRef.current += 1
+    }
+  }, [])
+
+  const refetch = useCallback(() => {
+    if (!path) return
+    const requestedPath = path
+    const requestID = ++requestIDRef.current
+    setLoading(true)
+    setError(null)
+    apiFetch<T>(requestedPath)
+      .then((nextData) => {
+        if (
+          mountedRef.current &&
+          activePathRef.current === requestedPath &&
+          requestIDRef.current === requestID
+        ) {
+          manualCache.set(requestedPath, nextData)
+          setDataState(nextData)
+        }
+      })
+      .catch((e: Error) => {
+        if (
+          mountedRef.current &&
+          activePathRef.current === requestedPath &&
+          requestIDRef.current === requestID
+        ) {
+          setError(e.message)
+        }
+      })
+      .finally(() => {
+        if (
+          mountedRef.current &&
+          activePathRef.current === requestedPath &&
+          requestIDRef.current === requestID
+        ) {
+          setLoading(false)
+        }
+      })
+  }, [path])
+
+  return {
+    data,
+    loading,
+    error,
+    refetch,
+    setData: (nextData) => {
+      if (path) manualCache.set(path, nextData)
+      setDataState(nextData)
     },
   }
 }
@@ -242,7 +322,7 @@ export function useSub2PoolTargets() {
 }
 
 export function useSub2PoolSnapshot(targetID: string | null) {
-  return useApi<Sub2PoolSnapshot>(
+  return useManualApi<Sub2PoolSnapshot>(
     targetID ? `/sub2-pool/targets/${encodeURIComponent(targetID)}/snapshot` : null,
   )
 }

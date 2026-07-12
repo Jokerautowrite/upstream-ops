@@ -19,6 +19,15 @@ export type AccountPoolMissingFilter =
   | "priority"
   | "balance"
   | "health"
+export type AccountPoolSort =
+  | "default"
+  | "priority-asc"
+  | "priority-desc"
+  | "multiplier-asc"
+  | "multiplier-desc"
+  | "balance-asc"
+  | "balance-desc"
+  | "name-asc"
 
 export interface AccountPoolFilterState {
   query: string
@@ -26,6 +35,7 @@ export interface AccountPoolFilterState {
   schedule: AccountPoolScheduleFilter
   health: AccountPoolHealthFilter
   missing: AccountPoolMissingFilter
+  sort: AccountPoolSort
 }
 
 interface AccountPoolFiltersProps {
@@ -61,6 +71,17 @@ const missingOptions: Array<{ value: AccountPoolMissingFilter; label: string }> 
   { value: "health", label: "缺健康状态" },
 ]
 
+const sortOptions: Array<{ value: AccountPoolSort; label: string }> = [
+  { value: "default", label: "默认业务顺序" },
+  { value: "priority-asc", label: "优先级从小到大" },
+  { value: "priority-desc", label: "优先级从大到小" },
+  { value: "multiplier-asc", label: "倍率从低到高" },
+  { value: "multiplier-desc", label: "倍率从高到低" },
+  { value: "balance-asc", label: "余额从低到高" },
+  { value: "balance-desc", label: "余额从高到低" },
+  { value: "name-asc", label: "名称 A-Z" },
+]
+
 export function AccountPoolFilters({
   filters,
   businessChannels,
@@ -73,7 +94,8 @@ export function AccountPoolFilters({
     filters.businessChannel !== "all" ||
     filters.schedule !== "all" ||
     filters.health !== "all" ||
-    filters.missing !== "all"
+    filters.missing !== "all" ||
+    filters.sort !== "default"
 
   function patch(next: Partial<AccountPoolFilterState>) {
     onChange({ ...filters, ...next })
@@ -81,13 +103,13 @@ export function AccountPoolFilters({
 
   return (
     <section className="rounded-lg border border-border bg-card p-3 shadow-sm">
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1.4fr)_repeat(4,minmax(0,1fr))_auto]">
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-[minmax(240px,1.4fr)_repeat(5,minmax(0,1fr))_auto]">
         <div className="relative min-w-0">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={filters.query}
             onChange={(event) => patch({ query: event.target.value })}
-            placeholder="搜索 ID、名称、平台、分组"
+            placeholder="搜索账号、ID、分组、倍率、余额、优先级"
             className="h-9 pl-8"
           />
         </div>
@@ -157,6 +179,22 @@ export function AccountPoolFilters({
           </SelectContent>
         </Select>
 
+        <Select
+          value={filters.sort}
+          onValueChange={(value) => patch({ sort: value as AccountPoolSort })}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="排序" />
+          </SelectTrigger>
+          <SelectContent>
+            {sortOptions.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
         <Button
           type="button"
           variant="ghost"
@@ -170,6 +208,7 @@ export function AccountPoolFilters({
               schedule: "all",
               health: "all",
               missing: "all",
+              sort: "default",
             })
           }
         >
@@ -184,4 +223,3 @@ export function AccountPoolFilters({
     </section>
   )
 }
-

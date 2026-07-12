@@ -49,7 +49,11 @@ const defaultFilters: AccountPoolFilterState = {
   schedule: "all",
   health: "all",
   missing: "all",
+  sort: "default",
 }
+
+let retainedTargetID: string | null = null
+let retainedFilters: AccountPoolFilterState = defaultFilters
 
 function deriveSummary(accounts: Sub2PoolAccount[], fallback?: Sub2PoolSnapshotSummary | null) {
   const derived = {
@@ -103,16 +107,28 @@ function errorMessage(err: unknown, fallback: string) {
   return err instanceof Error ? err.message : fallback
 }
 
+function nullableNumberCompare(
+  left: number | null | undefined,
+  right: number | null | undefined,
+  direction: "asc" | "desc",
+) {
+  const leftMissing = left == null || !Number.isFinite(left)
+  const rightMissing = right == null || !Number.isFinite(right)
+  if (leftMissing && rightMissing) return 0
+  if (leftMissing) return 1
+  if (rightMissing) return -1
+  return direction === "asc" ? left - right : right - left
+}
+
 export default function AccountPoolPage() {
   const targets = useSub2PoolTargets()
-  const [targetID, setTargetID] = useState<string | null>(null)
+  const [targetID, setTargetIDState] = useState<string | null>(retainedTargetID)
   const snapshot = useSub2PoolSnapshot(targetID)
   const automation = useSub2PoolAutomation(targetID)
   const triggerRefresh = useTriggerRefresh()
   const { confirm, dialog: confirmDialog } = useConfirm()
 
-  const [filters, setFilters] = useState<AccountPoolFilterState>(defaultFilters)
-  const [refreshing, setRefreshing] = useState(false)
+  const [filters, setFiltersState] = useState<AccountPoolFilterState>(retainedFilters)
   const [busyAccountID, setBusyAccountID] = useState<number | null>(null)
   const [preview, setPreview] = useState<Sub2PoolPriorityPreviewResponse | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -121,6 +137,16 @@ export default function AccountPoolPage() {
   const [applying, setApplying] = useState(false)
   const [applyConflict, setApplyConflict] = useState<string | null>(null)
   const [automationUpdating, setAutomationUpdating] = useState(false)
+
+  function setTargetID(nextTargetID: string) {
+    retainedTargetID = nextTargetID
+    setTargetIDState(nextTargetID)
+  }
+
+  function setFilters(nextFilters: AccountPoolFilterState) {
+    retainedFilters = nextFilters
+    setFiltersState(nextFilters)
+  }
 
   useEffect(() => {
     const list = targets.data ?? []
@@ -159,7 +185,7 @@ export default function AccountPoolPage() {
 
   const filteredAccounts = useMemo(() => {
     const query = filters.query.trim().toLowerCase()
-    return accounts.filter((account) => {
+    const filtered = accounts.filter((account) => {
       if (query) {
         const haystack = [
           String(account.id),
@@ -168,6 +194,13 @@ export default function AccountPoolPage() {
           account.type,
           account.business_channel ?? "",
           account.min_group ?? "",
+          account.current_priority ?? "",
+          account.suggested_priority ?? "",
+          account.upstream_multiplier ?? "",
+          account.balance ?? "",
+          account.schedulable_reason ?? "",
+          account.health_status ?? "",
+          account.balance_status ?? "",
         ]
           .join(" ")
           .toLowerCase()
@@ -183,6 +216,39 @@ export default function AccountPoolPage() {
       if (filters.health !== "all" && accountHealthTone(account) !== filters.health) return false
       return matchesMissingFilter(account, filters.missing)
     })
+
+    return filtered
+      .map((account, index) => ({ account, index }))
+      .sort((left, right) => {
+        let compared = 0
+        switch (filters.sort) {
+          case "priority-asc":
+            compared = nullableNumberCompare(left.account.current_priority, right.account.current_priority, "asc")
+            break
+          case "priority-desc":
+            compared = nullableNumberCompare(left.account.current_priority, right.account.current_priority, "desc")
+            break
+          case "multiplier-asc":
+            compared = nullableNumberCompare(left.account.upstream_multiplier, right.account.upstream_multiplier, "asc")
+            break
+          case "multiplier-desc":
+            compared = nullableNumberCompare(left.account.upstream_multiplier, right.account.upstream_multiplier, "desc")
+            break
+          case "balance-asc":
+            compared = nullableNumberCompare(left.account.balance, right.account.balance, "asc")
+            break
+          case "balance-desc":
+            compared = nullableNumberCompare(left.account.balance, right.account.balance, "desc")
+            break
+          case "name-asc":
+            compared = left.account.name.localeCompare(right.account.name, "zh-CN")
+            break
+          default:
+            break
+        }
+        return compared || left.index - right.index
+      })
+      .map(({ account }) => account)
   }, [accounts, filters])
 
   useEffect(() => {
@@ -201,9 +267,8 @@ export default function AccountPoolPage() {
     setPreview(null)
     setApplyOpen(false)
     setApplyConflict(null)
-    setRefreshing(true)
-    triggerRefresh()
-    window.setTimeout(() => setRefreshing(false), 800)
+    snapshot.refetch()
+    automation.refetch()
   }
 
   async function handleToggleSchedulable(account: Sub2PoolAccount, next: boolean) {
@@ -413,7 +478,7 @@ export default function AccountPoolPage() {
         selectedTargetID={targetID}
         summary={summary}
         refreshedAt={currentSnapshot?.refreshed_at}
-        loading={refreshing || snapshot.loading || targetChanging}
+        loading={snapshot.loading || targetChanging}
         onTargetChange={setTargetID}
         onRefresh={handleRefresh}
       />
@@ -424,13 +489,15 @@ export default function AccountPoolPage() {
         </div>
       ) : null}
 
-      <AccountPoolFilters
-        filters={filters}
-        businessChannels={businessChannels}
-        resultCount={filteredAccounts.length}
-        totalCount={accounts.length}
-        onChange={setFilters}
-      />
+      {currentSnapshot ? (
+        <AccountPoolFilters
+          filters={filters}
+          businessChannels={businessChannels}
+          resultCount={filteredAccounts.length}
+          totalCount={accounts.length}
+          onChange={setFilters}
+        />
+      ) : null}
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <AccountPoolAutomationCard
@@ -451,7 +518,21 @@ export default function AccountPoolPage() {
         />
       </div>
 
-      {accounts.length === 0 ? (
+      {!currentSnapshot ? (
+        <Empty className="border border-border bg-card">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <RefreshCw className="size-5" />
+            </EmptyMedia>
+            <EmptyTitle>账号数据尚未加载</EmptyTitle>
+            <EmptyDescription>切换到账号池不会自动请求数据。需要查看时点击刷新即可。</EmptyDescription>
+          </EmptyHeader>
+          <Button type="button" variant="outline" onClick={handleRefresh} disabled={snapshot.loading || !targetID}>
+            <RefreshCw className={snapshot.loading ? "size-3.5 animate-spin" : "size-3.5"} />
+            刷新账号池
+          </Button>
+        </Empty>
+      ) : accounts.length === 0 ? (
         <Empty className="border border-border bg-card">
           <EmptyHeader>
             <EmptyMedia variant="icon">
