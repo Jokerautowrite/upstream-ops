@@ -66,6 +66,52 @@ func TestGormOutboxDeduplicatesByRunNotIdenticalEventContent(t *testing.T) {
 	}
 }
 
+func TestGormOutboxAllowsDistinctFailureAndSuccessEventsForOneRun(t *testing.T) {
+	db, store := newRecoveryGormStore(t)
+	runID := recordPreparedRun(t, store, 1, "sig", nil)
+	failure := PoolEvent{
+		EventID:  "failure",
+		TargetID: 1,
+		PriorityResult: &ApplyResult{Failed: []ApplyItem{{
+			AccountID: 7,
+			Status:    "failed",
+			Stage:     "write",
+			Code:      "upstream_write_failed",
+		}}},
+	}
+	failureID, created, err := store.EnqueueRunOutbox(1, runID, failure)
+	if err != nil || !created || failureID == 0 {
+		t.Fatalf("enqueue failure id=%d created=%v err=%v", failureID, created, err)
+	}
+	failure.GeneratedAt = time.Now()
+	failure.PriorityResult.Preview.GeneratedAt = time.Now()
+	duplicateID, duplicateCreated, err := store.EnqueueRunOutbox(1, runID, failure)
+	if err != nil || duplicateCreated || duplicateID != failureID {
+		t.Fatalf("deduplicate failure id=%d created=%v err=%v", duplicateID, duplicateCreated, err)
+	}
+
+	success := PoolEvent{
+		EventID:  "success",
+		TargetID: 1,
+		PriorityResult: &ApplyResult{Applied: []ApplyItem{{
+			AccountID: 7,
+			Status:    "recovered_applied",
+		}}},
+	}
+	successID, successCreated, err := store.EnqueueRunOutbox(1, runID, success)
+	if err != nil || !successCreated || successID == 0 || successID == failureID {
+		t.Fatalf("enqueue success id=%d created=%v failure=%d err=%v", successID, successCreated, failureID, err)
+	}
+
+	var rows []GormPoolOutbox
+	if err := db.Where("target_id = ? AND run_id = ?", 1, runID).Order("id ASC").Find(&rows).Error; err != nil {
+		t.Fatalf("list run outbox rows: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("outbox rows=%#v", rows)
+	}
+}
+
 func TestGormFinalizePreparedRunIsCASAndDoesNotOverwriteAudit(t *testing.T) {
 	db, store := newRecoveryGormStore(t)
 	runID := recordPreparedRun(t, store, 1, "prepared-sig", nil)

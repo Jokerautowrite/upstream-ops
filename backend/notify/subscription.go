@@ -103,7 +103,7 @@ func (s Subscription) matchesChannel(id uint) bool {
 
 func (s Subscription) matchesEvent(event storage.NotificationEvent) bool {
 	if len(s.Events) == 0 {
-		return true
+		return !requiresExplicitEventSubscription(event)
 	}
 	for _, e := range s.Events {
 		if e == event {
@@ -111,6 +111,43 @@ func (s Subscription) matchesEvent(event storage.NotificationEvent) bool {
 		}
 	}
 	return false
+}
+
+func requiresExplicitEventSubscription(event storage.NotificationEvent) bool {
+	return event == storage.EventSub2PoolPriorityApplied ||
+		event == storage.EventSub2PoolPriorityFailed
+}
+
+func MatchesSubscriptions(subs []Subscription, msg Message) bool {
+	if len(subs) == 0 {
+		return !requiresExplicitEventSubscription(msg.Event)
+	}
+	return AnyMatch(subs, msg)
+}
+
+func HasExplicitEventSubscription(subs []Subscription, events ...storage.NotificationEvent) bool {
+	if len(events) == 0 {
+		return false
+	}
+	wanted := make(map[storage.NotificationEvent]struct{}, len(events))
+	for _, event := range events {
+		wanted[event] = struct{}{}
+	}
+	for _, sub := range subs {
+		for _, event := range sub.Events {
+			if _, exists := wanted[event]; exists {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func MatchesMessageSubscriptions(subs []Subscription, msg Message) bool {
+	if HasExplicitEventSubscription(subs, msg.SkipIfExplicitlySubscribed...) {
+		return false
+	}
+	return MatchesSubscriptions(subs, msg)
 }
 
 func isRateEvent(event storage.NotificationEvent) bool {

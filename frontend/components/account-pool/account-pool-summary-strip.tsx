@@ -38,11 +38,11 @@ function SummaryTile({
   tone?: "default" | "success" | "warning" | "danger"
 }) {
   return (
-    <div className="min-w-0 rounded-lg border border-border bg-background px-3 py-2">
-      <div className="text-[11px] leading-4 text-muted-foreground">{label}</div>
+    <div className="min-w-0 px-3 py-2.5 sm:px-4">
+      <div className="text-[10px] font-medium leading-4 text-muted-foreground">{label}</div>
       <div
         className={cn(
-          "mt-1 truncate text-xl font-semibold tabular-nums text-foreground",
+          "mt-0.5 truncate text-lg font-semibold tabular-nums text-foreground",
           tone === "success" && "text-success",
           tone === "warning" && "text-warning",
           tone === "danger" && "text-danger",
@@ -64,54 +64,57 @@ export function AccountPoolSummaryStrip({
   onRefresh,
 }: AccountPoolSummaryStripProps) {
   return (
-    <section className="rounded-lg border border-border bg-card p-3 shadow-sm sm:p-4">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div className="min-w-0 space-y-2">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Target className="size-4 text-muted-foreground" />
+    <section className="overflow-hidden rounded-lg border border-border bg-card shadow-[var(--shadow-card)]">
+      <div className="flex flex-col gap-3 border-b border-border px-3 py-3 sm:px-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="flex shrink-0 items-center gap-2 text-sm font-semibold">
+            <span className="flex size-7 items-center justify-center rounded-md bg-muted text-muted-foreground">
+              <Target className="size-3.5" />
+            </span>
             <span>Sub2 账号池</span>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <Select
-              value={selectedTargetID ?? undefined}
-              onValueChange={onTargetChange}
-              disabled={targets.length === 0}
-            >
-              <SelectTrigger className="w-full min-w-0 sm:w-72">
-                <SelectValue placeholder="选择 target" />
-              </SelectTrigger>
-              <SelectContent>
-                {targets.map((target) => (
-                  <SelectItem key={target.id} value={target.id}>
-                    {target.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onRefresh}
-              disabled={loading || !selectedTargetID}
-              className="w-full gap-1.5 sm:w-auto"
-            >
-              <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
-              刷新
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
+          <Select
+            value={selectedTargetID ?? undefined}
+            onValueChange={onTargetChange}
+            disabled={targets.length === 0}
+          >
+            <SelectTrigger className="h-8 w-full min-w-0 text-xs sm:w-72">
+              <SelectValue placeholder="选择 target" />
+            </SelectTrigger>
+            <SelectContent>
+              {targets.map((target) => (
+                <SelectItem key={target.id} value={target.id}>
+                  {target.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span className="min-w-0 truncate text-[11px] text-muted-foreground">
             {refreshedAt
-              ? `数据更新时间：${dateTime(refreshedAt)}（${relativeTime(refreshedAt)}）`
+              ? `${dateTime(refreshedAt)} · ${relativeTime(refreshedAt)}`
               : "尚未加载账号数据，点击刷新后读取最新快照"}
-          </p>
+          </span>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5 lg:w-[660px]">
-          <SummaryTile label="账号总数" value={summary.total_accounts} />
-          <SummaryTile label="可调度" value={summary.schedulable_accounts} tone="success" />
-          <SummaryTile label="健康" value={summary.healthy_accounts} tone="success" />
-          <SummaryTile label="欠费" value={summary.debt_accounts} tone="danger" />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onRefresh}
+          disabled={loading || !selectedTargetID}
+          className="h-8 w-full gap-1.5 shadow-none sm:w-auto"
+        >
+          <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+          刷新快照
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-2 divide-x divide-y divide-border sm:grid-cols-5 sm:divide-y-0">
+        <SummaryTile label="账号总数" value={summary.total_accounts} />
+        <SummaryTile label="可调度" value={summary.schedulable_accounts} tone="success" />
+        <SummaryTile label="健康" value={summary.healthy_accounts} tone="success" />
+        <SummaryTile label="欠费" value={summary.debt_accounts} tone="danger" />
+        <div className="col-span-2 sm:col-span-1">
           <SummaryTile
             label="缺倍率"
             value={summary.missing_multiplier_accounts}

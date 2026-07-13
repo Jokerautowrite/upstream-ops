@@ -19,12 +19,13 @@ import (
 //   - ChannelID = 来源上游 ID，0 表示系统消息或测试发送，跳过订阅过滤
 //   - ModelName = 倍率相关事件填写当前分组名
 type Message struct {
-	Event     storage.NotificationEvent
-	ChannelID uint
-	ModelName string
-	Subject   string
-	Body      string
-	Extra     map[string]any
+	Event                      storage.NotificationEvent
+	ChannelID                  uint
+	ModelName                  string
+	Subject                    string
+	Body                       string
+	Extra                      map[string]any
+	SkipIfExplicitlySubscribed []storage.NotificationEvent
 }
 
 // Notifier 通知渠道抽象。

@@ -46,6 +46,26 @@ reviewed and replayed without copying unrelated code.
   - the independent five-minute account-pool refresh is removed;
   - automatic cached refresh remains coupled to the 15-minute monitor cycle.
 
+### Account-pool stop reasons and priority notifications
+
+- Files:
+  - `backend/connector/sub2api/pool.go`
+  - `backend/sub2pool`
+  - `backend/api/sub2_pool.go`
+  - `backend/notify`
+  - `backend/storage/model.go`
+- Behavior:
+  - Sub2 runtime stop reasons and reset/until timestamps are read outside the
+    writable `AdminAccount` model;
+  - persisted stop reasons strip controls, redact credentials and URLs, and are
+    limited to 512 UTF-8-safe bytes;
+  - snapshots expose `stop_source`, `stop_reason`, and `stop_time` while keeping
+    the existing `schedulable_reason`;
+  - `sub2_pool_priority_applied` and `sub2_pool_priority_failed` are explicit
+    opt-in events; legacy `sub2_pool_changed` subscribers remain compatible;
+  - priority failure notifications contain only stable stage/code metadata, and
+    notification retries never replay Sub2 priority writes.
+
 ### Webhook identity fields
 
 - File:

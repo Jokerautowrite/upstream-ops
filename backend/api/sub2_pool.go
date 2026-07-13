@@ -132,6 +132,9 @@ type sub2PoolAccountDTO struct {
 	RateLimitStatus      string             `json:"rate_limit_status,omitempty"`
 	Schedulable          bool               `json:"schedulable"`
 	SchedulableReason    string             `json:"schedulable_reason,omitempty"`
+	StopSource           string             `json:"stop_source,omitempty"`
+	StopReason           string             `json:"stop_reason,omitempty"`
+	StopTime             *time.Time         `json:"stop_time,omitempty"`
 	TodayRequests        *int               `json:"today_requests,omitempty"`
 	CurrentConcurrency   int                `json:"current_concurrency"`
 	MaxConcurrency       int                `json:"max_concurrency"`
@@ -280,6 +283,9 @@ func accountDTO(account sub2pool.AccountSnapshot, suggestions map[int64]int, upd
 		RateLimitStatus:      poolRateLimitStatus(account),
 		Schedulable:          account.Schedulable,
 		SchedulableReason:    account.SkipReason,
+		StopSource:           account.StopSource,
+		StopReason:           account.StopReason,
+		StopTime:             clonePoolTime(account.StopTime),
 		TodayRequests:        clonePoolInt(account.TodayStats.Requests),
 		CurrentConcurrency:   account.CurrentConcurrency,
 		MaxConcurrency:       account.MaxConcurrency,

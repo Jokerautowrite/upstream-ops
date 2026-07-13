@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Bell,
+  CheckCircle2,
   Clock3,
   RefreshCw,
   KeyRound,
@@ -50,22 +51,24 @@ import type {
   UpstreamAnnouncement,
 } from "@/lib/api-types"
 
-const eventMeta: Record<NotificationEvent, { icon: LucideIcon; cls: string }> = {
-  balance_low: { icon: AlertTriangle, cls: "text-warning" },
-  login_failed: { icon: ShieldX, cls: "text-danger" },
-  captcha_failed: { icon: KeyRound, cls: "text-danger" },
-  rate_changed: { icon: ArrowUpRight, cls: "text-brand" },
-  rate_structure_changed: { icon: ArrowUpRight, cls: "text-brand" },
-  rate_added: { icon: Plus, cls: "text-brand" },
-  rate_removed: { icon: Trash2, cls: "text-warning" },
-  announcement: { icon: Bell, cls: "text-brand" },
-  monitor_failed: { icon: ShieldX, cls: "text-danger" },
-  subscription_daily_remaining_low: { icon: AlertTriangle, cls: "text-warning" },
-  subscription_weekly_remaining_low: { icon: AlertTriangle, cls: "text-warning" },
-  subscription_monthly_remaining_low: { icon: AlertTriangle, cls: "text-warning" },
-  subscription_expiring: { icon: Clock3, cls: "text-warning" },
-  upstream_sync_group_changed: { icon: RefreshCw, cls: "text-brand" },
-  sub2_pool_changed: { icon: RefreshCw, cls: "text-brand" },
+const eventMeta: Record<NotificationEvent, { icon: LucideIcon; cls: string; label: string }> = {
+  balance_low: { icon: AlertTriangle, cls: "text-warning", label: "余额不足" },
+  login_failed: { icon: ShieldX, cls: "text-danger", label: "登录失败" },
+  captcha_failed: { icon: KeyRound, cls: "text-danger", label: "验证码失败" },
+  rate_changed: { icon: ArrowUpRight, cls: "text-brand", label: "倍率变化" },
+  rate_structure_changed: { icon: ArrowUpRight, cls: "text-brand", label: "倍率结构变化" },
+  rate_added: { icon: Plus, cls: "text-brand", label: "新增倍率" },
+  rate_removed: { icon: Trash2, cls: "text-warning", label: "移除倍率" },
+  announcement: { icon: Bell, cls: "text-brand", label: "上游公告" },
+  monitor_failed: { icon: ShieldX, cls: "text-danger", label: "采集失败" },
+  subscription_daily_remaining_low: { icon: AlertTriangle, cls: "text-warning", label: "日额度不足" },
+  subscription_weekly_remaining_low: { icon: AlertTriangle, cls: "text-warning", label: "周额度不足" },
+  subscription_monthly_remaining_low: { icon: AlertTriangle, cls: "text-warning", label: "月额度不足" },
+  subscription_expiring: { icon: Clock3, cls: "text-warning", label: "订阅即将到期" },
+  upstream_sync_group_changed: { icon: RefreshCw, cls: "text-brand", label: "同步分组变化" },
+  sub2_pool_changed: { icon: RefreshCw, cls: "text-brand", label: "账号池综合变化" },
+  sub2_pool_priority_applied: { icon: CheckCircle2, cls: "text-success", label: "优先级调整成功" },
+  sub2_pool_priority_failed: { icon: ShieldX, cls: "text-danger", label: "优先级调整失败" },
 }
 
 const FEED_PREVIEW_SIZE = 10
@@ -150,14 +153,19 @@ export function AlertFeed() {
             <div className="max-h-80 overflow-y-auto overscroll-contain lg:h-full lg:max-h-none">
               <ul className="divide-y divide-border">
                 {items.map((a) => {
-                  const meta = eventMeta[a.event] ?? { icon: AlertTriangle, cls: "text-muted-foreground" }
+                  const meta = eventMeta[a.event] ?? { icon: AlertTriangle, cls: "text-muted-foreground", label: "其他事件" }
                   return (
                     <li key={a.id} className="px-4 py-3 sm:px-6">
                       <div className="flex min-w-0 items-start gap-2.5">
                         <meta.icon className={cn("size-4 shrink-0", meta.cls)} />
                         <div className="min-w-0 flex-1">
                           <div className="flex min-w-0 items-start justify-between gap-3">
-                            <p className="min-w-0 flex-1 truncate text-sm text-foreground">{a.subject}</p>
+                            <div className="flex min-w-0 flex-1 items-center gap-2">
+                              <p className="min-w-0 truncate text-sm text-foreground">{a.subject}</p>
+                              <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">
+                                {meta.label}
+                              </Badge>
+                            </div>
                             <span className="shrink-0 text-xs text-muted-foreground">
                               {relativeTime(a.sent_at)}
                             </span>
@@ -194,14 +202,19 @@ export function AlertFeed() {
           >
             <ul className="divide-y divide-border">
               {feed.map((a) => {
-                const meta = eventMeta[a.event] ?? { icon: AlertTriangle, cls: "text-muted-foreground" }
+                const meta = eventMeta[a.event] ?? { icon: AlertTriangle, cls: "text-muted-foreground", label: "其他事件" }
                 return (
                   <li key={a.id} className="px-4 py-3">
                     <div className="flex min-w-0 items-start gap-2.5">
                         <meta.icon className={cn("mt-0.5 size-4 shrink-0", meta.cls)} />
                         <div className="min-w-0 flex-1">
                           <div className="flex min-w-0 items-start justify-between gap-3">
-                            <p className="min-w-0 flex-1 text-sm font-medium text-foreground">{a.subject}</p>
+                            <div className="flex min-w-0 flex-1 items-center gap-2">
+                              <p className="min-w-0 text-sm font-medium text-foreground">{a.subject}</p>
+                              <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">
+                                {meta.label}
+                              </Badge>
+                            </div>
                             <span className="shrink-0 text-xs text-muted-foreground">
                               {relativeTime(a.sent_at)}
                             </span>

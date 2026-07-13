@@ -1,4 +1,4 @@
-import { Search, X } from "lucide-react"
+import { ChevronDown, Search, SlidersHorizontal, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -102,21 +102,23 @@ export function AccountPoolFilters({
     filters.health !== "all" ||
     filters.missing !== "all" ||
     filters.sort !== "default"
+  const activeSecondaryFilters =
+    Number(filters.health !== "all") + Number(filters.missing !== "all")
 
   function patch(next: Partial<AccountPoolFilterState>) {
     onChange({ ...filters, ...next })
   }
 
   return (
-    <section className="rounded-lg border border-border bg-card p-3 shadow-sm">
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-[minmax(240px,1.4fr)_repeat(5,minmax(0,1fr))_auto]">
-        <div className="relative min-w-0">
+    <section className="rounded-lg border border-border bg-card p-2.5 shadow-[var(--shadow-card)]">
+      <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center">
+        <div className="relative min-w-0 flex-1 lg:min-w-64">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={filters.query}
             onChange={(event) => patch({ query: event.target.value })}
             placeholder="搜索账号、ID、分组、倍率、余额、优先级"
-            className="h-9 pl-8"
+            className="h-8 pl-8 text-xs"
           />
         </div>
 
@@ -124,7 +126,7 @@ export function AccountPoolFilters({
           value={filters.businessChannel}
           onValueChange={(value) => patch({ businessChannel: value })}
         >
-          <SelectTrigger className="w-full">
+          <SelectTrigger className="h-8 w-full text-xs lg:w-40">
             <SelectValue placeholder="业务渠道" />
           </SelectTrigger>
           <SelectContent>
@@ -141,7 +143,7 @@ export function AccountPoolFilters({
           value={filters.schedule}
           onValueChange={(value) => patch({ schedule: value as AccountPoolScheduleFilter })}
         >
-          <SelectTrigger className="w-full">
+          <SelectTrigger className="h-8 w-full text-xs lg:w-36">
             <SelectValue placeholder="调度状态" />
           </SelectTrigger>
           <SelectContent>
@@ -154,42 +156,10 @@ export function AccountPoolFilters({
         </Select>
 
         <Select
-          value={filters.health}
-          onValueChange={(value) => patch({ health: value as AccountPoolHealthFilter })}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="健康状态" />
-          </SelectTrigger>
-          <SelectContent>
-            {healthOptions.map((item) => (
-              <SelectItem key={item.value} value={item.value}>
-                {item.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Select
-          value={filters.missing}
-          onValueChange={(value) => patch({ missing: value as AccountPoolMissingFilter })}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="数据缺失" />
-          </SelectTrigger>
-          <SelectContent>
-            {missingOptions.map((item) => (
-              <SelectItem key={item.value} value={item.value}>
-                {item.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Select
           value={filters.sort}
           onValueChange={(value) => patch({ sort: value as AccountPoolSort })}
         >
-          <SelectTrigger className="w-full">
+          <SelectTrigger className="h-8 w-full text-xs lg:w-44">
             <SelectValue placeholder="排序" />
           </SelectTrigger>
           <SelectContent>
@@ -201,11 +171,62 @@ export function AccountPoolFilters({
           </SelectContent>
         </Select>
 
+        <details className="group relative">
+          <summary className="flex h-8 w-full cursor-pointer list-none items-center justify-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs font-medium text-foreground shadow-xs transition hover:bg-accent lg:w-auto">
+            <SlidersHorizontal className="size-3.5 text-muted-foreground" />
+            更多筛选
+            {activeSecondaryFilters > 0 ? (
+              <span className="flex size-4 items-center justify-center rounded-full bg-primary text-[9px] text-primary-foreground">
+                {activeSecondaryFilters}
+              </span>
+            ) : null}
+            <ChevronDown className="size-3.5 text-muted-foreground transition-transform group-open:rotate-180" />
+          </summary>
+          <div className="absolute right-0 top-10 z-20 w-[min(20rem,calc(100vw-2rem))] space-y-2 rounded-lg border border-border bg-popover p-3 shadow-[var(--shadow-elevated)]">
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">健康状态</label>
+              <Select
+                value={filters.health}
+                onValueChange={(value) => patch({ health: value as AccountPoolHealthFilter })}
+              >
+                <SelectTrigger className="h-8 w-full text-xs">
+                  <SelectValue placeholder="健康状态" />
+                </SelectTrigger>
+                <SelectContent>
+                  {healthOptions.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">数据完整性</label>
+              <Select
+                value={filters.missing}
+                onValueChange={(value) => patch({ missing: value as AccountPoolMissingFilter })}
+              >
+                <SelectTrigger className="h-8 w-full text-xs">
+                  <SelectValue placeholder="数据缺失" />
+                </SelectTrigger>
+                <SelectContent>
+                  {missingOptions.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </details>
+
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          className="h-9 gap-1.5"
+          className="h-8 gap-1.5 px-2 text-xs"
           disabled={!hasActiveFilters}
           onClick={() =>
             onChange({
@@ -221,10 +242,10 @@ export function AccountPoolFilters({
           <X className="size-3.5" />
           清空
         </Button>
-      </div>
 
-      <div className="mt-2 text-xs text-muted-foreground">
-        显示 {resultCount.toLocaleString("zh-CN")} / {totalCount.toLocaleString("zh-CN")} 个账号
+        <div className="shrink-0 border-t border-border pt-2 text-right text-[11px] text-muted-foreground lg:ml-auto lg:border-t-0 lg:pt-0">
+          {resultCount.toLocaleString("zh-CN")} / {totalCount.toLocaleString("zh-CN")} 个账号
+        </div>
       </div>
     </section>
   )

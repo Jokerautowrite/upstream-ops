@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useState } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { useTheme } from "next-themes"
-import { Activity, Github, Home, LogOut, RefreshCw, Sun, Moon, Settings, UsersRound } from "lucide-react"
+import { Activity, Github, Home, LogOut, RefreshCw, Sun, Moon, Settings, UsersRound, MoreHorizontal } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Tooltip,
   TooltipContent,
@@ -86,15 +93,15 @@ export function MonitorHeader() {
   }
 
   return (
-    <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur-sm">
-      <div className="mx-auto flex h-14 max-w-360 items-center justify-between gap-2 px-3 sm:gap-4 sm:px-5">
+    <header className="sticky top-0 z-30 border-b border-border bg-background/92 backdrop-blur-xl">
+      <div className="mx-auto flex h-14 max-w-[1280px] items-center justify-between gap-2 px-3 sm:px-5 xl:px-6">
         {/* left: logo + title */}
         <div className="flex min-w-0 items-center gap-2.5">
-          <div className="flex size-8 items-center justify-center rounded-lg bg-foreground text-background">
-            <Activity className="size-4" strokeWidth={2.5} />
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-foreground/10 bg-foreground text-background shadow-[var(--shadow-card)]">
+            <Activity className="size-4" strokeWidth={2.25} />
           </div>
           <div className="min-w-0">
-            <h1 className="truncate text-base font-semibold tracking-tight text-foreground">{appTitle}</h1>
+            <h1 className="max-w-32 truncate text-sm font-semibold text-foreground sm:max-w-48 sm:text-[15px]">{appTitle}</h1>
             {version ? (
               <p className="truncate text-[11px] leading-3 text-muted-foreground">
                 <button
@@ -122,9 +129,9 @@ export function MonitorHeader() {
         </div>
 
         {/* right: actions */}
-        <div className="flex shrink-0 items-center gap-1.5 sm:gap-3">
+        <div className="flex shrink-0 items-center gap-1">
           {/* last collected + refresh */}
-          <div className="hidden items-center gap-2 sm:flex">
+          <div className="mr-1 hidden items-center gap-2 lg:flex">
             <span className="text-xs text-muted-foreground">
               {"上次采集 "}
               <span className="font-medium text-foreground">{relativeTime(lastCollectedAt)}</span>
@@ -133,10 +140,10 @@ export function MonitorHeader() {
               <TooltipTrigger asChild>
                 <Button
                   variant="outline"
-                  size="sm"
+                  size="icon-sm"
                   onClick={handleRefresh}
                   disabled={syncing}
-                  className="gap-1.5 border-border bg-background text-foreground hover:bg-muted"
+                  className="border-border bg-card text-foreground shadow-none hover:bg-muted"
                   aria-label="刷新视图"
                 >
                   <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
@@ -151,20 +158,18 @@ export function MonitorHeader() {
             </Tooltip>
           </div>
 
-          {/* mobile-only refresh (no tooltip / no timestamp to save space) */}
-
           <Tooltip delayDuration={200}>
             <TooltipTrigger asChild>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefresh}
-            disabled={syncing}
-            className="gap-1.5 border-border bg-background px-2 text-foreground hover:bg-muted sm:hidden"
-            aria-label="刷新视图"
-          >
-            <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
-          </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={handleRefresh}
+                disabled={syncing}
+                className="text-muted-foreground hover:text-foreground lg:hidden"
+                aria-label="刷新视图"
+              >
+                <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
+              </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">
               {"刷新视图"}
@@ -174,10 +179,10 @@ export function MonitorHeader() {
           <Tooltip delayDuration={200}>
             <TooltipTrigger asChild>
               <Button
-                variant="outline"
-                size="icon"
+                variant={location.pathname === "/" ? "secondary" : "ghost"}
+                size="icon-sm"
                 onClick={() => navigate("/")}
-                className="size-8 border-border bg-background text-foreground hover:bg-muted"
+                className="text-muted-foreground shadow-none hover:text-foreground"
                 aria-label="主页"
               >
                 <Home className="size-3.5" />
@@ -192,13 +197,12 @@ export function MonitorHeader() {
             <TooltipTrigger asChild>
               <Button
                 variant={location.pathname === "/account-pool" ? "secondary" : "outline"}
-                size="sm"
+                size="icon-sm"
                 onClick={() => navigate("/account-pool")}
-                className="h-8 gap-1.5 border-border px-2 text-foreground hover:bg-muted"
+                className="border-0 text-muted-foreground shadow-none hover:text-foreground"
                 aria-label="Sub2 账号池"
               >
                 <UsersRound className="size-3.5" />
-                <span className="hidden lg:inline">账号池</span>
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">
@@ -210,10 +214,10 @@ export function MonitorHeader() {
           <Tooltip delayDuration={200}>
             <TooltipTrigger asChild>
               <Button
-                variant="outline"
-                size="icon"
+                variant={location.pathname === "/settings" ? "secondary" : "ghost"}
+                size="icon-sm"
                 onClick={() => navigate("/settings")}
-                className="size-8 border-border bg-background text-foreground hover:bg-muted"
+                className="text-muted-foreground shadow-none hover:text-foreground"
                 aria-label="系统设置"
               >
                 <Settings className="size-3.5" />
@@ -224,70 +228,115 @@ export function MonitorHeader() {
             </TooltipContent>
           </Tooltip>
 
-          <Tooltip delayDuration={200}>
-            <TooltipTrigger asChild>
-              <Button
-                asChild
-                variant="outline"
-                size="icon"
-                className="size-8 border-border bg-background text-foreground hover:bg-muted"
-                aria-label="GitHub 仓库"
-              >
+          <div className="hidden items-center gap-1 md:flex">
+            <Tooltip delayDuration={200}>
+              <TooltipTrigger asChild>
+                <Button
+                  asChild
+                  variant="ghost"
+                  size="icon-sm"
+                  className="text-muted-foreground shadow-none hover:text-foreground"
+                  aria-label="GitHub 仓库"
+                >
+                  <a
+                    href="https://github.com/bejix/upstream-ops"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Github className="size-3.5" />
+                  </a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                {"GitHub · bejix/upstream-ops"}
+              </TooltipContent>
+            </Tooltip>
+
+            <Tooltip delayDuration={200}>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                  className="text-muted-foreground shadow-none hover:text-foreground"
+                  aria-label="切换主题"
+                >
+                  {mounted && theme === "dark" ? (
+                    <Moon className="size-3.5" />
+                  ) : (
+                    <Sun className="size-3.5" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                {mounted && theme === "dark" ? "深色模式 · 点击切换浅色" : "浅色模式 · 点击切换深色"}
+              </TooltipContent>
+            </Tooltip>
+
+            {authDisabled ? null : (
+              <Tooltip delayDuration={200}>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={logout}
+                    className="text-muted-foreground shadow-none hover:text-foreground"
+                    aria-label="退出登录"
+                  >
+                    <LogOut className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="text-xs">
+                  {username ? `${username} · 退出登录` : "退出登录"}
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+
+          <DropdownMenu>
+            <Tooltip delayDuration={200}>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="text-muted-foreground shadow-none hover:text-foreground md:hidden"
+                    aria-label="更多操作"
+                  >
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                {"更多操作"}
+              </TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem asChild>
                 <a
                   href="https://github.com/bejix/upstream-ops"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
                   <Github className="size-3.5" />
+                  GitHub 仓库
                 </a>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-xs">
-              {"GitHub · bejix/upstream-ops"}
-            </TooltipContent>
-          </Tooltip>
-
-          {/* theme toggle */}
-          <Tooltip delayDuration={200}>
-            <TooltipTrigger asChild>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-                className="size-8 border-border bg-background text-foreground hover:bg-muted"
-                aria-label="切换主题"
-              >
-                {mounted && theme === "dark" ? (
-                  <Moon className="size-3.5" />
-                ) : (
-                  <Sun className="size-3.5" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-xs">
-              {mounted && theme === "dark" ? "深色模式 · 点击切换浅色" : "浅色模式 · 点击切换深色"}
-            </TooltipContent>
-          </Tooltip>
-
-          {/* logout — 鉴权关闭时整个按钮不显示 */}
-          {authDisabled ? null : (
-            <Tooltip delayDuration={200}>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={logout}
-                  className="size-8 border-border bg-background text-foreground hover:bg-muted"
-                  aria-label="退出登录"
-                >
-                  <LogOut className="size-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">
-                {username ? `${username} · 退出登录` : "退出登录"}
-              </TooltipContent>
-            </Tooltip>
-          )}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setTheme(theme === "dark" ? "light" : "dark")}>
+                {mounted && theme === "dark" ? <Moon className="size-3.5" /> : <Sun className="size-3.5" />}
+                {mounted && theme === "dark" ? "切换浅色模式" : "切换深色模式"}
+              </DropdownMenuItem>
+              {authDisabled ? null : (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={logout}>
+                    <LogOut className="size-3.5" />
+                    {username ? `${username} · 退出` : "退出登录"}
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
     </header>

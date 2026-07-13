@@ -122,8 +122,18 @@ const notificationEventOptions: Array<{ id: string; label: string; events: Notif
   },
   {
     id: "sub2_pool_changed",
-    label: "Sub2 账号池",
+    label: "Sub2 账号池综合变化",
     events: ["sub2_pool_changed"],
+  },
+  {
+    id: "sub2_pool_priority_applied",
+    label: "Sub2 优先级调整成功",
+    events: ["sub2_pool_priority_applied"],
+  },
+  {
+    id: "sub2_pool_priority_failed",
+    label: "Sub2 优先级调整失败",
+    events: ["sub2_pool_priority_failed"],
   },
   { id: "announcement", label: "上游公告", events: ["announcement"] },
   { id: "login_failed", label: "登录失败", events: ["login_failed"] },
@@ -951,7 +961,7 @@ function SubRowEditor({ rowIndex, row, channels, onChange, onRemove, disabled }:
             htmlFor={`event-all-${rowIndex}`}
             className="text-xs font-normal"
           >
-            全部事件
+            默认事件（不含优先级）
           </Label>
         </div>
         <div className="flex items-center gap-1.5">
@@ -964,6 +974,12 @@ function SubRowEditor({ rowIndex, row, channels, onChange, onRemove, disabled }:
           </Label>
         </div>
       </RadioGroup>
+
+      {row.event_mode === "all" ? (
+        <p className="text-[11px] text-muted-foreground">
+          优先级调整成功/失败属于写操作结果，需要切换到“指定事件”后明确勾选。
+        </p>
+      ) : null}
 
       {row.event_mode === "custom" ? (
         <div className="space-y-1.5">

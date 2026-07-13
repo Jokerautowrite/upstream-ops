@@ -44,9 +44,9 @@ func (GormTargetState) TableName() string { return "sub2_pool_target_states" }
 
 type GormPoolOutbox struct {
 	ID                 uint      `gorm:"primaryKey" json:"id"`
-	TargetID           uint      `gorm:"not null;index;uniqueIndex:idx_sub2_pool_outbox_run" json:"target_id"`
-	RunID              uint      `gorm:"not null;uniqueIndex:idx_sub2_pool_outbox_run" json:"run_id"`
-	EventKey           string    `gorm:"size:64;not null;index" json:"event_key"`
+	TargetID           uint      `gorm:"not null;index;uniqueIndex:idx_sub2_pool_outbox_event" json:"target_id"`
+	RunID              uint      `gorm:"not null;uniqueIndex:idx_sub2_pool_outbox_event" json:"run_id"`
+	EventKey           string    `gorm:"size:64;not null;index;uniqueIndex:idx_sub2_pool_outbox_event" json:"event_key"`
 	EventJSON          string    `gorm:"type:text;not null" json:"-"`
 	Status             string    `gorm:"size:32;not null;index" json:"status"`
 	Attempts           int       `gorm:"not null;default:0" json:"attempts"`
@@ -115,7 +115,7 @@ func NewGormStateStore(db *gorm.DB) *GormStateStore {
 // integration point can opt these isolated tables in without touching
 // upstream-sync tables.
 func (s *GormStateStore) AutoMigrate() error {
-	return s.db.AutoMigrate(
+	if err := s.db.AutoMigrate(
 		&GormTargetState{},
 		&GormPoolOutbox{},
 		&GormPoolRun{},
@@ -123,7 +123,15 @@ func (s *GormStateStore) AutoMigrate() error {
 		&GormPoolLease{},
 		&GormPoolSnapshot{},
 		&GormPoolAccountRateMapping{},
-	)
+	); err != nil {
+		return err
+	}
+	if s.db.Migrator().HasIndex(&GormPoolOutbox{}, "idx_sub2_pool_outbox_run") {
+		if err := s.db.Migrator().DropIndex(&GormPoolOutbox{}, "idx_sub2_pool_outbox_run"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *GormStateStore) LoadSnapshot(targetID uint) (*Snapshot, *PriorityPreview, error) {
@@ -139,10 +147,12 @@ func (s *GormStateStore) LoadSnapshot(targetID uint) (*Snapshot, *PriorityPrevie
 	if err := json.Unmarshal([]byte(row.PreviewJSON), &preview); err != nil {
 		return nil, nil, err
 	}
+	snapshot = sanitizeSnapshot(snapshot)
 	return &snapshot, &preview, nil
 }
 
 func (s *GormStateStore) SaveSnapshot(snapshot Snapshot, preview PriorityPreview) error {
+	snapshot = sanitizeSnapshot(snapshot)
 	snapshotRaw, err := json.Marshal(snapshot)
 	if err != nil {
 		return err
@@ -301,6 +311,10 @@ func (s *GormStateStore) EnqueueOutbox(targetID uint, event PoolEvent) (uint, bo
 	return enqueueOutboxDB(s.db, targetID, 0, event)
 }
 
+func (s *GormStateStore) EnqueueRunOutbox(targetID, runID uint, event PoolEvent) (uint, bool, error) {
+	return enqueueOutboxDB(s.db, targetID, runID, event)
+}
+
 func enqueueOutboxDB(db *gorm.DB, targetID, runID uint, event PoolEvent) (uint, bool, error) {
 	raw, err := json.Marshal(event)
 	if err != nil {
@@ -313,7 +327,12 @@ func enqueueOutboxDB(db *gorm.DB, targetID, runID uint, event PoolEvent) (uint, 
 		EventJSON: string(raw),
 		Status:    "pending",
 	}
-	result := db.Where("target_id = ? AND run_id = ?", targetID, runID).Attrs(row).FirstOrCreate(&row)
+	result := db.Where(
+		"target_id = ? AND run_id = ? AND event_key = ?",
+		targetID,
+		runID,
+		row.EventKey,
+	).Attrs(row).FirstOrCreate(&row)
 	if result.Error != nil {
 		return 0, false, result.Error
 	}
@@ -651,6 +670,7 @@ func (s *MemoryStateStore) LoadSnapshot(targetID uint) (*Snapshot, *PriorityPrev
 	if !exists {
 		return nil, nil, gorm.ErrRecordNotFound
 	}
+	snapshot = sanitizeSnapshot(snapshot)
 	preview := s.previews[targetID]
 	return &snapshot, &preview, nil
 }
@@ -658,6 +678,7 @@ func (s *MemoryStateStore) LoadSnapshot(targetID uint) (*Snapshot, *PriorityPrev
 func (s *MemoryStateStore) SaveSnapshot(snapshot Snapshot, preview PriorityPreview) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	snapshot = sanitizeSnapshot(snapshot)
 	s.snapshots[snapshot.TargetID] = snapshot
 	s.previews[snapshot.TargetID] = preview
 	return nil
@@ -732,16 +753,20 @@ func (s *MemoryStateStore) SaveAutomation(state AutomationState) error {
 }
 
 func (s *MemoryStateStore) EnqueueOutbox(targetID uint, event PoolEvent) (uint, bool, error) {
+	return s.EnqueueRunOutbox(targetID, 0, event)
+}
+
+func (s *MemoryStateStore) EnqueueRunOutbox(targetID, runID uint, event PoolEvent) (uint, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := poolEventKey(event)
+	key := outboxEventKey(targetID, runID, event)
 	if existing := s.eventIDs[key]; existing != 0 {
 		return existing, false, nil
 	}
 	s.nextOutbox++
 	s.outbox[s.nextOutbox] = OutboxItem{
 		ID:        s.nextOutbox,
-		RunID:     0,
+		RunID:     runID,
 		TargetID:  targetID,
 		Event:     cloneEvent(event),
 		Status:    "pending",
@@ -751,7 +776,17 @@ func (s *MemoryStateStore) EnqueueOutbox(targetID uint, event PoolEvent) (uint, 
 	return s.nextOutbox, true, nil
 }
 
+func outboxEventKey(targetID, runID uint, event PoolEvent) string {
+	return "run:" + strconv.FormatUint(uint64(targetID), 10) +
+		":" + strconv.FormatUint(uint64(runID), 10) +
+		":" + poolEventKey(event)
+}
+
 func poolEventKey(event PoolEvent) string {
+	if event.EventID != "" {
+		sum := sha256.Sum256([]byte(event.EventID))
+		return hex.EncodeToString(sum[:])
+	}
 	canonical := cloneEvent(event)
 	canonical.GeneratedAt = time.Time{}
 	if canonical.PriorityResult != nil {
@@ -824,7 +859,7 @@ func (s *MemoryStateStore) FinalizeCycle(
 	var outboxID uint
 	var created bool
 	if event != nil && hasEventSignal(*event) {
-		key := "run:" + strconv.FormatUint(uint64(targetID), 10) + ":" + strconv.FormatUint(uint64(runID), 10)
+		key := outboxEventKey(targetID, runID, *event)
 		if existing := s.eventIDs[key]; existing != 0 {
 			outboxID = existing
 		} else {

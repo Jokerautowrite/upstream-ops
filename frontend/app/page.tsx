@@ -9,11 +9,11 @@ export default function Page() {
     <>
       <KpiRow />
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-5">
-        <div className="lg:col-span-3">
+      <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.65fr)_minmax(320px,0.85fr)]">
+        <div className="min-w-0">
           <BalanceOverview />
         </div>
-        <div className="lg:col-span-2">
+        <div className="min-w-0">
           <MultiplierChanges />
         </div>
       </div>

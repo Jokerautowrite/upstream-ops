@@ -2,6 +2,7 @@ package sub2pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -24,21 +25,67 @@ func (n *NotifyAdapter) DispatchPoolEvent(ctx context.Context, event PoolEvent) 
 	if n == nil || n.dispatcher == nil {
 		return ErrUnavailable
 	}
-	return n.dispatcher.Dispatch(ctx, notify.Message{
-		Event:     storage.EventSub2PoolChanged,
-		ChannelID: 0,
-		Subject:   poolEventSubject(event),
-		Body:      poolEventBody(event),
-		Extra: map[string]any{
-			"event_id":           event.EventID,
-			"target_id":          event.TargetID,
-			"rate_changes":       len(event.RateChanges),
-			"missing_multiplier": len(event.MissingMultiplierIDs),
-			"missing_balance":    len(event.MissingBalanceIDs),
-			"low_balances":       len(event.LowBalances),
-			"guards":             len(event.Guards),
-		},
-	})
+	var dispatchErrors []error
+	for _, message := range poolEventMessages(event) {
+		if err := n.dispatcher.Dispatch(ctx, message); err != nil {
+			dispatchErrors = append(dispatchErrors, err)
+		}
+	}
+	return errors.Join(dispatchErrors...)
+}
+
+func poolEventMessages(event PoolEvent) []notify.Message {
+	applied := realPriorityAppliedItems(event)
+	failed := realPriorityFailedItems(event)
+	explicitEvents := make([]storage.NotificationEvent, 0, 2)
+	messages := make([]notify.Message, 0, 3)
+	if len(applied) > 0 {
+		explicitEvents = append(explicitEvents, storage.EventSub2PoolPriorityApplied)
+		messages = append(messages, notify.Message{
+			Event:     storage.EventSub2PoolPriorityApplied,
+			ChannelID: 0,
+			Subject:   "Sub2 优先级调整成功",
+			Body:      priorityAppliedBody(applied),
+			Extra: map[string]any{
+				"event_id":  event.EventID,
+				"target_id": event.TargetID,
+				"applied":   len(applied),
+			},
+		})
+	}
+	if len(failed) > 0 {
+		explicitEvents = append(explicitEvents, storage.EventSub2PoolPriorityFailed)
+		messages = append(messages, notify.Message{
+			Event:     storage.EventSub2PoolPriorityFailed,
+			ChannelID: 0,
+			Subject:   "Sub2 优先级调整失败",
+			Body:      priorityFailedBody(failed),
+			Extra: map[string]any{
+				"event_id":  event.EventID,
+				"target_id": event.TargetID,
+				"failed":    len(failed),
+			},
+		})
+	}
+	if hasEventSignal(event) {
+		messages = append(messages, notify.Message{
+			Event:                      storage.EventSub2PoolChanged,
+			ChannelID:                  0,
+			Subject:                    poolEventSubject(event),
+			Body:                       poolEventBody(event),
+			SkipIfExplicitlySubscribed: explicitEvents,
+			Extra: map[string]any{
+				"event_id":           event.EventID,
+				"target_id":          event.TargetID,
+				"rate_changes":       len(event.RateChanges),
+				"missing_multiplier": len(event.MissingMultiplierIDs),
+				"missing_balance":    len(event.MissingBalanceIDs),
+				"low_balances":       len(event.LowBalances),
+				"guards":             len(event.Guards),
+			},
+		})
+	}
+	return messages
 }
 
 func poolEventSubject(event PoolEvent) string {
@@ -132,6 +179,62 @@ func poolEventBody(event PoolEvent) string {
 		sections = append(sections, strings.Join(lines, "\n"))
 	}
 	return strings.Join(sections, "\n\n")
+}
+
+func realPriorityAppliedItems(event PoolEvent) []ApplyItem {
+	if event.PriorityResult == nil {
+		return nil
+	}
+	out := make([]ApplyItem, 0, len(event.PriorityResult.Applied))
+	for _, item := range event.PriorityResult.Applied {
+		if item.Status == "applied" || item.Status == "recovered_applied" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func realPriorityFailedItems(event PoolEvent) []ApplyItem {
+	if event.PriorityResult == nil {
+		return nil
+	}
+	out := make([]ApplyItem, 0, len(event.PriorityResult.Failed))
+	for _, item := range event.PriorityResult.Failed {
+		if item.Status == "failed" && item.Stage != "" && item.Code != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func priorityAppliedBody(items []ApplyItem) string {
+	lines := []string{fmt.Sprintf("优先级调整成功：%d 个", len(items))}
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf(
+			"- [%s] %s：%d -> %d",
+			item.Channel,
+			poolAccountLabel(item.AccountName, item.AccountID),
+			item.BeforePriority,
+			item.TargetPriority,
+		))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func priorityFailedBody(items []ApplyItem) string {
+	lines := []string{fmt.Sprintf("优先级调整失败：%d 个", len(items))}
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf(
+			"- [%s] %s：%d -> %d（stage=%s code=%s）",
+			item.Channel,
+			poolAccountLabel(item.AccountName, item.AccountID),
+			item.BeforePriority,
+			item.TargetPriority,
+			item.Stage,
+			item.Code,
+		))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func poolAccountLabel(name string, id int64) string {

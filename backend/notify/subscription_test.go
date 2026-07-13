@@ -104,3 +104,62 @@ func TestParseSubscriptionsLegacyChannelID(t *testing.T) {
 		t.Fatalf("legacy channel_id should migrate to ChannelIDs=[7], got %+v", list)
 	}
 }
+
+func TestPriorityEventsRequireExplicitSubscription(t *testing.T) {
+	applied := Message{ChannelID: 0, Event: storage.EventSub2PoolPriorityApplied}
+	failed := Message{ChannelID: 0, Event: storage.EventSub2PoolPriorityFailed}
+	generic := Message{ChannelID: 0, Event: storage.EventSub2PoolChanged}
+
+	if MatchesSubscriptions(nil, applied) || MatchesSubscriptions(nil, failed) {
+		t.Fatal("empty legacy subscriptions must not opt in to priority events")
+	}
+	if !MatchesSubscriptions(nil, generic) {
+		t.Fatal("empty legacy subscriptions must keep receiving generic pool events")
+	}
+
+	legacyWildcard := []Subscription{{Mode: SubscriptionModeAll}}
+	if MatchesSubscriptions(legacyWildcard, applied) || !MatchesSubscriptions(legacyWildcard, generic) {
+		t.Fatalf("legacy wildcard matching changed: applied=%v generic=%v",
+			MatchesSubscriptions(legacyWildcard, applied),
+			MatchesSubscriptions(legacyWildcard, generic),
+		)
+	}
+
+	explicit := []Subscription{{
+		Mode: SubscriptionModeAll,
+		Events: []storage.NotificationEvent{
+			storage.EventSub2PoolPriorityApplied,
+		},
+	}}
+	if !MatchesSubscriptions(explicit, applied) || MatchesSubscriptions(explicit, failed) {
+		t.Fatalf("explicit priority matching failed: applied=%v failed=%v",
+			MatchesSubscriptions(explicit, applied),
+			MatchesSubscriptions(explicit, failed),
+		)
+	}
+}
+
+func TestGenericPoolEventCanSkipExplicitPrioritySubscribers(t *testing.T) {
+	subs := []Subscription{{
+		Events: []storage.NotificationEvent{
+			storage.EventSub2PoolChanged,
+			storage.EventSub2PoolPriorityApplied,
+		},
+	}}
+	if !HasExplicitEventSubscription(subs, storage.EventSub2PoolPriorityApplied) {
+		t.Fatal("explicit applied subscription was not detected")
+	}
+	if HasExplicitEventSubscription(subs, storage.EventSub2PoolPriorityFailed) {
+		t.Fatal("unsubscribed failure event was detected")
+	}
+	msg := Message{
+		Event:                      storage.EventSub2PoolChanged,
+		SkipIfExplicitlySubscribed: []storage.NotificationEvent{storage.EventSub2PoolPriorityApplied},
+	}
+	if MatchesMessageSubscriptions(subs, msg) {
+		t.Fatal("generic pool event would duplicate an explicitly subscribed applied event")
+	}
+	if !MatchesMessageSubscriptions(nil, msg) {
+		t.Fatal("legacy subscriber lost the generic compatibility event")
+	}
+}

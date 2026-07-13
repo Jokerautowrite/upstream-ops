@@ -49,7 +49,7 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
   const balance = payload.find((p) => p.dataKey === "balance")?.value
   const cost = payload.find((p) => p.dataKey === "cost")?.value
   return (
-    <div className="rounded-lg border border-border bg-popover px-3 py-2 shadow-md">
+    <div className="rounded-md border border-border bg-popover px-3 py-2 shadow-[var(--shadow-elevated)]">
       <p className="text-xs text-muted-foreground">{label}</p>
       {balance != null ? (
         <p className="text-sm font-semibold text-brand">
@@ -108,25 +108,25 @@ export function BalanceOverview() {
   const activeDot = isMobile ? { r: 4, strokeWidth: 0 } : { r: 5, strokeWidth: 0 }
 
   return (
-    <Card className="border border-border shadow-none lg:h-100">
-      <CardHeader className="flex shrink-0 flex-row items-center justify-between px-4 pb-2 sm:px-6">
-        <CardTitle className="text-base font-semibold">{"余额概览"}</CardTitle>
-        <span className="text-xs text-muted-foreground">{"最近 7 天"}</span>
-      </CardHeader>
-      <CardContent className="flex min-h-0 flex-1 flex-col px-4 sm:px-6">
-        <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+    <Card className="min-w-0 gap-0 overflow-hidden border border-border py-0 shadow-[var(--shadow-card)] lg:h-105">
+      <CardHeader className="flex shrink-0 flex-row items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          <CardTitle className="text-sm font-semibold">{"余额与消费趋势"}</CardTitle>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">最近 7 天采样</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-3 text-[11px]">
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-brand" />
-            <span className="text-muted-foreground">{"余额"}</span>
+            <span className="h-0.5 w-4 rounded-full bg-brand" />
+            <span className="text-muted-foreground">余额</span>
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-warning" />
-            <span className="text-muted-foreground">
-              {"消费趋势"}
-            </span>
+            <span className="h-0.5 w-4 rounded-full bg-warning" />
+            <span className="text-muted-foreground">消费</span>
           </span>
         </div>
-        <div className="h-64 w-full sm:h-72 lg:h-auto lg:min-h-36 lg:flex-1">
+      </CardHeader>
+      <CardContent className="flex min-h-0 flex-1 flex-col px-0">
+        <div className="h-64 w-full px-2 pt-3 sm:h-72 sm:px-4 lg:h-auto lg:min-h-40 lg:flex-1">
           {isLoading ? (
             <div className="flex h-full items-center justify-center text-xs text-muted-foreground">{"加载中…"}</div>
           ) : data.length === 0 ? (
@@ -169,7 +169,7 @@ export function BalanceOverview() {
                   type="monotone"
                   dataKey="balance"
                   stroke="var(--brand)"
-                  strokeWidth={2}
+                  strokeWidth={2.25}
                   dot={dot}
                   activeDot={{ ...activeDot, fill: "var(--brand)" }}
                 />
@@ -178,7 +178,7 @@ export function BalanceOverview() {
                   type="monotone"
                   dataKey="cost"
                   stroke="var(--warning)"
-                  strokeWidth={2}
+                  strokeWidth={2.25}
                   connectNulls={false}
                   dot={dot}
                   activeDot={{ ...activeDot, fill: "var(--warning)" }}
@@ -188,29 +188,38 @@ export function BalanceOverview() {
           )}
         </div>
 
-        {/* per-channel chips */}
+        {/* per-channel snapshot */}
         {channels.length > 0 ? (
-          <div className="mt-3 flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-3 lg:max-h-16 lg:overflow-y-auto lg:pr-1">
-            {channels.map((c) => {
-              const isFailed = !!c.last_error
-              const isUnknown = c.last_balance == null
-              return (
-                <span key={c.id} className="inline-flex max-w-full items-center gap-1.5 text-xs">
-                  <span
-                    className={cn(
-                      "size-2 rounded-full",
-                      isFailed ? "bg-danger" : isUnknown ? "bg-muted-foreground/40" : "bg-success",
-                    )}
-                  />
-                  <span className="max-w-32 truncate font-medium text-foreground sm:max-w-none">{c.name}</span>
-                  <span className="min-w-0 tabular-nums text-muted-foreground">
-                    {money(c.last_balance)}
-                    {" · 今日 "}
-                    {money(c.today_cost)}
-                  </span>
-                </span>
-              )
-            })}
+          <div className="shrink-0 border-t border-border">
+            <div className="flex items-center justify-between px-4 py-2">
+              <span className="text-[11px] font-medium text-muted-foreground">渠道快照</span>
+              <span className="text-[10px] text-muted-foreground">{channels.length} 个渠道</span>
+            </div>
+            <div className="grid max-h-23 grid-cols-1 overflow-y-auto border-t border-border sm:grid-cols-2">
+              {channels.map((c) => {
+                const isFailed = !!c.last_error
+                const isUnknown = c.last_balance == null
+                return (
+                  <div
+                    key={c.id}
+                    className="flex min-w-0 items-center gap-2 border-b border-border px-4 py-2 last:border-b-0 sm:odd:border-r"
+                  >
+                    <span
+                      className={cn(
+                        "size-1.5 shrink-0 rounded-full",
+                        isFailed ? "bg-danger" : isUnknown ? "bg-muted-foreground/40" : "bg-success",
+                      )}
+                    />
+                    <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground">{c.name}</span>
+                    <span className="shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+                      <span className="text-foreground">{money(c.last_balance)}</span>
+                      {" / "}
+                      {money(c.today_cost)}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         ) : null}
       </CardContent>

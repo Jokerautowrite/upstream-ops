@@ -828,6 +828,78 @@ func TestRunWithNoChangesDoesNotWriteOrNotify(t *testing.T) {
 	}
 }
 
+func TestPriorityOperationFailuresEmitStableDurableEvents(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*fakeAdmin)
+		wantStage string
+		wantCode  string
+	}{
+		{
+			name: "write",
+			configure: func(admin *fakeAdmin) {
+				admin.failUpdate[1] = true
+			},
+			wantStage: "write",
+			wantCode:  "upstream_write_failed",
+		},
+		{
+			name: "reread",
+			configure: func(admin *fakeAdmin) {
+				admin.failGetAt[1] = 3
+			},
+			wantStage: "reread",
+			wantCode:  "upstream_read_failed",
+		},
+		{
+			name: "verify",
+			configure: func(admin *fakeAdmin) {
+				admin.ignoreUpdate[1] = true
+			},
+			wantStage: "verify",
+			wantCode:  "priority_mismatch",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewMemoryStateStore()
+			service, admin := newTestServiceWithState(t, []sub2api.PoolAccount{
+				poolAccount(1, "https://api.example.test/v1", "key-1", 90),
+			}, Config{MinimumAccountCount: 1}, store)
+			dispatcher := &capturingDispatcher{}
+			service.SetDispatcher(dispatcher)
+			tt.configure(admin)
+
+			_, err := service.Run(context.Background(), 1)
+			if !isPublicError(err, ErrUnavailable.Code) && !isPublicError(err, ErrPreviewConflict.Code) {
+				t.Fatalf("run error=%v", err)
+			}
+			if len(dispatcher.events) != 1 ||
+				dispatcher.events[0].PriorityResult == nil ||
+				len(dispatcher.events[0].PriorityResult.Failed) != 1 {
+				t.Fatalf("failure events=%#v", dispatcher.events)
+			}
+			failure := dispatcher.events[0].PriorityResult.Failed[0]
+			if failure.Status != "failed" ||
+				failure.Stage != tt.wantStage ||
+				failure.Code != tt.wantCode {
+				t.Fatalf("failure item=%#v", failure)
+			}
+			pending, err := store.ListPendingOutbox(1, 10)
+			if err != nil {
+				t.Fatalf("list outbox: %v", err)
+			}
+			if len(pending) != 0 {
+				t.Fatalf("successfully delivered failure event remained pending: %#v", pending)
+			}
+			prepared, err := store.ListPreparedRuns(1, 10)
+			if err != nil || len(prepared) != 1 {
+				t.Fatalf("prepared run was not retained: %#v err=%v", prepared, err)
+			}
+		})
+	}
+}
+
 func TestPreparedRunRecoveryDoesNotReplayCompletedWrites(t *testing.T) {
 	store := NewMemoryStateStore()
 	service, admin := newTestServiceWithState(t, []sub2api.PoolAccount{
@@ -1437,14 +1509,17 @@ func (f fakeTargets) FindByID(id uint) (*storage.UpstreamSyncTarget, error) {
 }
 
 type fakeAdmin struct {
-	mu          sync.Mutex
-	groups      []sub2api.AdminGroup
-	accounts    map[int64]sub2api.PoolAccount
-	failUpdate  map[int64]bool
-	updateCount int
-	priorityLog []map[int64]int
-	listStarted chan struct{}
-	listRelease chan struct{}
+	mu           sync.Mutex
+	groups       []sub2api.AdminGroup
+	accounts     map[int64]sub2api.PoolAccount
+	failUpdate   map[int64]bool
+	failGetAt    map[int64]int
+	getCount     map[int64]int
+	ignoreUpdate map[int64]bool
+	updateCount  int
+	priorityLog  []map[int64]int
+	listStarted  chan struct{}
+	listRelease  chan struct{}
 }
 
 func (f *fakeAdmin) ListGroups(_ context.Context, _ sub2api.AdminTarget, _ bool) ([]sub2api.AdminGroup, error) {
@@ -1471,6 +1546,10 @@ func (f *fakeAdmin) ListAllPoolAccounts(_ context.Context, _ sub2api.AdminTarget
 func (f *fakeAdmin) GetPoolAccount(_ context.Context, _ sub2api.AdminTarget, accountID int64) (*sub2api.PoolAccount, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.getCount[accountID]++
+	if f.failGetAt[accountID] > 0 && f.getCount[accountID] == f.failGetAt[accountID] {
+		return nil, errors.New("read rejected with raw body that must not leak")
+	}
 	account, ok := f.accounts[accountID]
 	if !ok {
 		return nil, errors.New("missing account")
@@ -1489,7 +1568,9 @@ func (f *fakeAdmin) UpdatePoolAccountPriority(_ context.Context, _ sub2api.Admin
 	if !ok {
 		return nil, errors.New("missing account")
 	}
-	account.Account.Priority = priority
+	if !f.ignoreUpdate[accountID] {
+		account.Account.Priority = priority
+	}
 	f.accounts[accountID] = account
 	f.updateCount++
 	f.priorityLog = append(f.priorityLog, f.currentPrioritiesLocked())
@@ -1571,6 +1652,15 @@ func (d *countingDispatcher) DispatchPoolEvent(context.Context, PoolEvent) error
 	return nil
 }
 
+type capturingDispatcher struct {
+	events []PoolEvent
+}
+
+func (d *capturingDispatcher) DispatchPoolEvent(_ context.Context, event PoolEvent) error {
+	d.events = append(d.events, cloneEvent(event))
+	return nil
+}
+
 type failFinalizeStore struct {
 	*MemoryStateStore
 	mu       sync.Mutex
@@ -1613,9 +1703,12 @@ func newTestServiceWithState(
 		t.Fatalf("encrypt admin key: %v", err)
 	}
 	admin := &fakeAdmin{
-		groups:     []sub2api.AdminGroup{{ID: 1, Name: "PLUS", Ratio: 0.1, Status: "active"}},
-		accounts:   map[int64]sub2api.PoolAccount{},
-		failUpdate: map[int64]bool{},
+		groups:       []sub2api.AdminGroup{{ID: 1, Name: "PLUS", Ratio: 0.1, Status: "active"}},
+		accounts:     map[int64]sub2api.PoolAccount{},
+		failUpdate:   map[int64]bool{},
+		failGetAt:    map[int64]int{},
+		getCount:     map[int64]int{},
+		ignoreUpdate: map[int64]bool{},
 	}
 	keys := &fakeKeys{items: map[uint][]connector.APIKey{}, revealed: map[string]string{}}
 	for _, account := range accounts {

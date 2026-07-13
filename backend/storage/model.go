@@ -231,6 +231,8 @@ const (
 	EventSubscriptionExpiring     NotificationEvent = "subscription_expiring"
 	EventUpstreamSyncGroupChanged NotificationEvent = "upstream_sync_group_changed"
 	EventSub2PoolChanged          NotificationEvent = "sub2_pool_changed"
+	EventSub2PoolPriorityApplied  NotificationEvent = "sub2_pool_priority_applied"
+	EventSub2PoolPriorityFailed   NotificationEvent = "sub2_pool_priority_failed"
 )
 
 // NotificationLog 通知发送记录。

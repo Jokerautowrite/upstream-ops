@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,8 +41,12 @@ func TestDecodePoolAccountReadsSafeHealthAndTodayStats(t *testing.T) {
 			"id": 7,
 			"status": "active",
 			"current_concurrency": 3,
+			"error_message": "upstream rejected request",
 			"rate_limited": false,
+			"rate_limit_reset_at": "` + future + `",
 			"temp_unschedulable": true,
+			"temp_unschedulable_reason": "temporary maintenance",
+			"temp_unschedulable_until": "` + future + `",
 			"overload_until": "` + future + `",
 		"today_requests": 17,
 		"today_actual_cost": 2.5,
@@ -57,10 +62,17 @@ func TestDecodePoolAccountReadsSafeHealthAndTodayStats(t *testing.T) {
 		t.Fatalf("fingerprint was not decoded: %#v", account)
 	}
 	if account.Health.CurrentConcurrency != 3 ||
-		account.Health.RateLimited ||
+		!account.Health.RateLimited ||
 		!account.Health.TemporarilyUnschedulable ||
 		!account.Health.Overloaded {
 		t.Fatalf("health = %#v", account.Health)
+	}
+	if account.Health.ErrorMessage != "upstream rejected request" ||
+		account.Health.TempUnschedulableReason != "temporary maintenance" ||
+		account.Health.RateLimitResetAt == nil ||
+		account.Health.TempUnschedulableUntil == nil ||
+		account.Health.OverloadUntil == nil {
+		t.Fatalf("health details = %#v", account.Health)
 	}
 	if account.Stats.TodayRequests == nil || *account.Stats.TodayRequests != 17 ||
 		account.Stats.TodayCost == nil || *account.Stats.TodayCost != 2.5 {
@@ -73,8 +85,12 @@ func TestDecodePoolAccountIgnoresExpiredRuntimeWindows(t *testing.T) {
 	account, err := decodePoolAccount([]byte(`{
 		"id": 8,
 		"rate_limited_at": "2026-01-01T00:00:00Z",
+		"rate_limited": true,
 		"rate_limit_reset_at": "` + past + `",
+		"temp_unschedulable": true,
+		"temp_unschedulable_reason": "expired reason",
 		"temp_unschedulable_until": "` + past + `",
+		"overloaded": true,
 		"overload_until": "` + past + `"
 	}`))
 	if err != nil {
@@ -82,6 +98,29 @@ func TestDecodePoolAccountIgnoresExpiredRuntimeWindows(t *testing.T) {
 	}
 	if account.Health.RateLimited || account.Health.TemporarilyUnschedulable || account.Health.Overloaded {
 		t.Fatalf("expired health window stayed active: %#v", account.Health)
+	}
+}
+
+func TestPoolHealthFieldsAreNotPartOfAdminAccountSerialization(t *testing.T) {
+	raw, err := json.Marshal(AdminAccount{
+		ID:          7,
+		Name:        "account",
+		Credentials: map[string]any{"api_key": "sk-request-only"},
+	})
+	if err != nil {
+		t.Fatalf("marshal admin account: %v", err)
+	}
+	text := string(raw)
+	for _, forbidden := range []string{
+		"error_message",
+		"temp_unschedulable_reason",
+		"rate_limit_reset_at",
+		"temp_unschedulable_until",
+		"overload_until",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("admin account request contains health field %q: %s", forbidden, text)
+		}
 	}
 }
 

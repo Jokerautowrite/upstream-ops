@@ -276,7 +276,7 @@ func (d *Dispatcher) fanout(ctx context.Context, msg Message, extraFilter func(*
 	for i := range channels {
 		ch := channels[i]
 		subs, _ := ParseSubscriptions(ch.Subscriptions)
-		if len(subs) > 0 && !AnyMatch(subs, msg) {
+		if !MatchesMessageSubscriptions(subs, msg) {
 			continue
 		}
 		if extraFilter != nil && !extraFilter(&ch) {

@@ -74,6 +74,7 @@ type AutomationStore interface {
 	LoadAutomation(targetID uint) (AutomationState, error)
 	SaveAutomation(state AutomationState) error
 	EnqueueOutbox(targetID uint, event PoolEvent) (uint, bool, error)
+	EnqueueRunOutbox(targetID, runID uint, event PoolEvent) (uint, bool, error)
 	ListPendingOutbox(targetID uint, limit int) ([]OutboxItem, error)
 	MarkOutboxDelivery(outboxID uint, delivered bool) error
 	RecordRun(record RunRecord) (uint, error)
@@ -191,6 +192,9 @@ type AccountSnapshot struct {
 	Availability       Availability  `json:"availability"`
 	Health             AccountHealth `json:"health"`
 	SkipReason         string        `json:"skip_reason,omitempty"`
+	StopSource         string        `json:"stop_source,omitempty"`
+	StopReason         string        `json:"stop_reason,omitempty"`
+	StopTime           *time.Time    `json:"stop_time,omitempty"`
 	MatchStatus        string        `json:"match_status"`
 	FingerprintState   string        `json:"fingerprint_state"`
 	IdentityDigest     string        `json:"identity_digest,omitempty"`
@@ -279,6 +283,8 @@ type ApplyItem struct {
 	TargetPriority int    `json:"target_priority"`
 	AfterPriority  *int   `json:"after_priority,omitempty"`
 	Status         string `json:"status"`
+	Stage          string `json:"stage,omitempty"`
+	Code           string `json:"code,omitempty"`
 }
 
 type SchedulableResult struct {

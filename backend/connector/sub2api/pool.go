@@ -23,13 +23,19 @@ type PoolAccount struct {
 	Stats             PoolAccountStats
 }
 
-// PoolAccountHealth contains display-safe account health fields. It deliberately
-// excludes raw error messages and credentials.
+// PoolAccountHealth contains account runtime health fields. Error text remains
+// backend-only and must be sanitized before it is copied into a durable
+// snapshot.
 type PoolAccountHealth struct {
 	CurrentConcurrency       int
 	RateLimited              bool
 	TemporarilyUnschedulable bool
 	Overloaded               bool
+	ErrorMessage             string
+	TempUnschedulableReason  string
+	RateLimitResetAt         *time.Time
+	TempUnschedulableUntil   *time.Time
+	OverloadUntil            *time.Time
 }
 
 // PoolAccountStats contains safe display-only daily aggregate values.
@@ -343,16 +349,18 @@ func decodePoolAccount(raw []byte) (PoolAccount, error) {
 		CredentialFingerprint struct {
 			APIKeySHA256 string `json:"api_key_sha256"`
 		} `json:"credential_fingerprint"`
-		CurrentConcurrency     int             `json:"current_concurrency"`
-		RateLimited            json.RawMessage `json:"rate_limited"`
-		RateLimitResetAt       json.RawMessage `json:"rate_limit_reset_at"`
-		TempUnschedulable      json.RawMessage `json:"temp_unschedulable"`
-		TempUnschedulableUntil json.RawMessage `json:"temp_unschedulable_until"`
-		Overloaded             json.RawMessage `json:"overloaded"`
-		OverloadUntil          json.RawMessage `json:"overload_until"`
-		TodayRequests          json.RawMessage `json:"today_requests"`
-		TodayCost              json.RawMessage `json:"today_cost"`
-		TodayActualCost        json.RawMessage `json:"today_actual_cost"`
+		CurrentConcurrency      int             `json:"current_concurrency"`
+		ErrorMessage            string          `json:"error_message"`
+		RateLimited             json.RawMessage `json:"rate_limited"`
+		RateLimitResetAt        json.RawMessage `json:"rate_limit_reset_at"`
+		TempUnschedulable       json.RawMessage `json:"temp_unschedulable"`
+		TempUnschedulableReason string          `json:"temp_unschedulable_reason"`
+		TempUnschedulableUntil  json.RawMessage `json:"temp_unschedulable_until"`
+		Overloaded              json.RawMessage `json:"overloaded"`
+		OverloadUntil           json.RawMessage `json:"overload_until"`
+		TodayRequests           json.RawMessage `json:"today_requests"`
+		TodayCost               json.RawMessage `json:"today_cost"`
+		TodayActualCost         json.RawMessage `json:"today_actual_cost"`
 	}
 	if err := json.Unmarshal(raw, &nested); err != nil {
 		return PoolAccount{}, fmt.Errorf("decode pool account health fields: %w", err)
@@ -360,15 +368,23 @@ func decodePoolAccount(raw []byte) (PoolAccount, error) {
 	if fingerprint == "" {
 		fingerprint = normalizeSHA256(nested.CredentialFingerprint.APIKeySHA256)
 	}
+	now := time.Now()
+	rateLimitResetAt := timeJSON(nested.RateLimitResetAt)
+	tempUnschedulableUntil := timeJSON(nested.TempUnschedulableUntil)
+	overloadUntil := timeJSON(nested.OverloadUntil)
 	return PoolAccount{
 		Account:           account,
 		APIKeyFingerprint: fingerprint,
 		Health: PoolAccountHealth{
-			CurrentConcurrency: nested.CurrentConcurrency,
-			RateLimited:        boolJSON(nested.RateLimited) || futureTimeJSON(nested.RateLimitResetAt),
-			TemporarilyUnschedulable: boolJSON(nested.TempUnschedulable) ||
-				futureTimeJSON(nested.TempUnschedulableUntil),
-			Overloaded: boolJSON(nested.Overloaded) || futureTimeJSON(nested.OverloadUntil),
+			CurrentConcurrency:       nested.CurrentConcurrency,
+			RateLimited:              runtimeWindowActive(nested.RateLimited, rateLimitResetAt, now),
+			TemporarilyUnschedulable: runtimeWindowActive(nested.TempUnschedulable, tempUnschedulableUntil, now),
+			Overloaded:               runtimeWindowActive(nested.Overloaded, overloadUntil, now),
+			ErrorMessage:             strings.TrimSpace(nested.ErrorMessage),
+			TempUnschedulableReason:  strings.TrimSpace(nested.TempUnschedulableReason),
+			RateLimitResetAt:         rateLimitResetAt,
+			TempUnschedulableUntil:   tempUnschedulableUntil,
+			OverloadUntil:            overloadUntil,
 		},
 		Stats: PoolAccountStats{
 			TodayRequests: integerJSON(nested.TodayRequests),
@@ -389,20 +405,42 @@ func boolJSON(value json.RawMessage) bool {
 	return false
 }
 
-func futureTimeJSON(value json.RawMessage) bool {
+func timeJSON(value json.RawMessage) *time.Time {
 	text := strings.TrimSpace(string(value))
 	if text == "" || text == "null" || text == `""` {
-		return false
+		return nil
 	}
 	var timestamp time.Time
 	if err := json.Unmarshal(value, &timestamp); err == nil {
-		return timestamp.After(time.Now())
+		return &timestamp
 	}
 	var unix int64
 	if err := json.Unmarshal(value, &unix); err == nil {
-		return time.Unix(unix, 0).After(time.Now())
+		if unix > 1_000_000_000_000 {
+			unix /= 1000
+		}
+		timestamp = time.Unix(unix, 0)
+		return &timestamp
 	}
-	return false
+	var encoded string
+	if err := json.Unmarshal(value, &encoded); err == nil {
+		unix, err := strconv.ParseInt(strings.TrimSpace(encoded), 10, 64)
+		if err == nil {
+			if unix > 1_000_000_000_000 {
+				unix /= 1000
+			}
+			timestamp = time.Unix(unix, 0)
+			return &timestamp
+		}
+	}
+	return nil
+}
+
+func runtimeWindowActive(flag json.RawMessage, until *time.Time, now time.Time) bool {
+	if until != nil {
+		return until.After(now)
+	}
+	return boolJSON(flag)
 }
 
 func integerJSON(value json.RawMessage) *int {

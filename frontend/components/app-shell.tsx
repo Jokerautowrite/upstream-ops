@@ -14,13 +14,13 @@ const SHOW_DOCK = false
 
 export function AppShell() {
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen min-w-0 bg-background">
       <MonitorHeader />
       <main
         className={
           SHOW_DOCK
-            ? "mx-auto max-w-360 space-y-4 px-3 py-3 pb-24 sm:space-y-5 sm:px-5 sm:py-5"
-            : "mx-auto max-w-360 space-y-4 px-3 py-3 sm:space-y-5 sm:px-5 sm:py-5"
+            ? "mx-auto min-w-0 max-w-[1280px] space-y-4 px-3 py-4 pb-24 sm:space-y-5 sm:px-5 sm:py-5 xl:px-6"
+            : "mx-auto min-w-0 max-w-[1280px] space-y-4 px-3 py-4 sm:space-y-5 sm:px-5 sm:py-5 xl:px-6"
         }
       >
         <Outlet />

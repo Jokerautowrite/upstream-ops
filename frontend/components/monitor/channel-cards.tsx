@@ -95,9 +95,9 @@ const statusMap: Record<Status, { label: string; cls: string }> = {
 
 function StatTile({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex h-16 min-w-0 flex-col justify-between rounded-md border border-border bg-muted/20 px-2.5 py-2">
+    <div className="flex min-h-12 min-w-0 flex-col justify-between border-t border-border pt-2">
       <span className="text-[10px] leading-none text-muted-foreground">{label}</span>
-      <div className="min-w-0 overflow-hidden text-[13px] font-semibold leading-tight text-foreground">
+      <div className="mt-1 min-w-0 overflow-hidden text-[13px] font-semibold leading-tight text-foreground">
         {typeof children === "string" ? <span className="block truncate">{children}</span> : children}
       </div>
     </div>
@@ -212,7 +212,7 @@ function InlineRates({ channelID }: { channelID: number }) {
         </div>
         {/* 折叠时底部淡出，提示还有更多内容 */}
         {!expanded && hasOverflow ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-linear-to-t from-background to-transparent" />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-linear-to-t from-card to-transparent" />
         ) : null}
       </div>
     </div>
@@ -734,7 +734,7 @@ export function ChannelCards() {
 
   return (
     <section>
-      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mb-3 flex flex-col gap-2 border-b border-border pb-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-baseline gap-3">
           <h2 className="text-base font-semibold text-foreground">{"渠道"}</h2>
           <p className="text-xs text-muted-foreground">{"实时健康、余额与同步状态"}</p>
@@ -817,13 +817,13 @@ export function ChannelCards() {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3">
+          <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {visibleChannels.map((c) => {
               const status = statusOf(c)
               const meta = statusMap[status]
               return (
-                <Card key={c.id} className="flex flex-col gap-0 border border-border p-3 shadow-none sm:p-4">
-                  <div className="flex items-start justify-between gap-3">
+                <Card key={c.id} className="flex flex-col gap-0 overflow-hidden border border-border bg-card p-0 shadow-[var(--shadow-card)]">
+                  <div className="flex items-start justify-between gap-3 px-3 pt-3 sm:px-4 sm:pt-4">
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <span className="truncate text-sm font-semibold text-foreground">{c.name}</span>
                       <span
@@ -871,7 +871,7 @@ export function ChannelCards() {
                     </div>
                   </div>
 
-                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 px-3 sm:grid-cols-3 sm:px-4">
                     <StatTile label="余额">
                       <Tooltip delayDuration={150}>
                         <TooltipTrigger asChild>
@@ -906,7 +906,7 @@ export function ChannelCards() {
                     </StatTile>
                     <ChannelSubscriptionUsageMetricTiles channel={c} />
                     {c.last_error ? (
-                      <div className="col-span-3 rounded-md border border-border bg-muted/20 px-2.5 py-2">
+                      <div className="col-span-2 border-t border-danger/20 bg-danger/5 px-2.5 py-2 sm:col-span-3">
                         <p className="max-h-16 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-[11px] leading-4 text-danger" title={c.last_error}>
                           {c.last_error}
                         </p>
@@ -914,13 +914,15 @@ export function ChannelCards() {
                     ) : null}
                   </div>
 
-                  <InlineRates channelID={c.id} />
+                  <div className="px-3 sm:px-4">
+                    <InlineRates channelID={c.id} />
+                  </div>
 
-                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <div className="mt-3 grid grid-cols-3 gap-1 border-y border-border bg-muted/20 p-1">
                     <Button
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
-                      className="gap-1 text-xs"
+                      className="h-8 gap-1 px-1 text-[11px]"
                       disabled={!!syncState[c.id]?.running || anySyncRunning}
                       onClick={() => startStream(c, "sync")}
                     >
@@ -930,9 +932,9 @@ export function ChannelCards() {
                       {"同步"}
                     </Button>
                     <Button
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
-                      className="gap-1 text-xs"
+                      className="h-8 gap-1 px-1 text-[11px]"
                       disabled={!!syncState[c.id]?.running || anySyncRunning}
                       onClick={() => startStream(c, "test-login")}
                       >
@@ -940,36 +942,36 @@ export function ChannelCards() {
                         {"测试登录"}
                     </Button>
                     <Button
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
-                      className="gap-1 text-xs"
+                      className="h-8 gap-1 px-1 text-[11px]"
                       onClick={() => setRecharging(c)}
                     >
                       <CreditCard className="size-3" />
                       {"充值"}
                     </Button>
                     <Button
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
-                      className="gap-1 text-xs"
+                      className="h-8 gap-1 px-1 text-[11px]"
                       onClick={() => setRedeeming(c)}
                     >
                       <Gift className="size-3" />
                       {"兑换"}
                     </Button>
                     <Button
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
-                      className="gap-1 text-xs"
+                      className="h-8 gap-1 px-1 text-[11px]"
                       onClick={() => setManagingKeys(c)}
                     >
                       <KeyRound className="size-3" />
                       {"密钥"}
                     </Button>
                     <Button
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
-                      className="gap-1 text-xs"
+                      className="h-8 gap-1 px-1 text-[11px]"
                       onClick={() => {
                         setEditing(c)
                         setCreating(true)
@@ -980,9 +982,11 @@ export function ChannelCards() {
                     </Button>
                   </div>
 
-                  <SyncProgressStrip state={syncState[c.id] ?? emptySyncState()} />
+                  <div className="px-3 sm:px-4">
+                    <SyncProgressStrip state={syncState[c.id] ?? emptySyncState()} />
+                  </div>
 
-                  <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-2.5">
+                  <div className="flex items-center justify-between gap-2 px-2 py-2 sm:px-3">
                     <Button
                       variant="ghost"
                       size="sm"
@@ -1065,7 +1069,7 @@ export function ChannelCards() {
             })}
           </div>
 
-          <div className="mt-3 flex flex-col gap-2 rounded-lg border border-border bg-muted/10 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="mt-3 flex flex-col gap-2 border-t border-border px-1 pt-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-xs text-muted-foreground">
               {pageSizeAll
                 ? `显示全部 ${totalChannels} 个渠道`

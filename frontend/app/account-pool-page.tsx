@@ -204,6 +204,8 @@ export default function AccountPoolPage() {
           account.suggested_priority ?? "",
           account.upstream_multiplier ?? "",
           account.balance ?? "",
+          account.stop_reason ?? "",
+          account.stop_source ?? "",
           account.schedulable_reason ?? "",
           account.health_status ?? "",
           account.balance_status ?? "",
@@ -504,7 +506,7 @@ export default function AccountPoolPage() {
   }
 
   return (
-    <>
+    <div className="mx-auto max-w-[1160px] space-y-4 sm:space-y-5">
       <AccountPoolSummaryStrip
         targets={targets.data ?? []}
         selectedTargetID={targetID}
@@ -531,7 +533,7 @@ export default function AccountPoolPage() {
         />
       ) : null}
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
         <AccountPoolAutomationCard
           status={currentAutomation}
           loading={automation.loading || (Boolean(targetID) && !automationMatchesTarget)}
@@ -614,6 +616,6 @@ export default function AccountPoolPage() {
         onApply={handleApplyPreview}
       />
       {confirmDialog}
-    </>
+    </div>
   )
 }

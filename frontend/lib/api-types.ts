@@ -42,6 +42,8 @@ export type NotificationEvent =
   | "subscription_expiring"
   | "upstream_sync_group_changed"
   | "sub2_pool_changed"
+  | "sub2_pool_priority_applied"
+  | "sub2_pool_priority_failed"
 
 export interface Channel {
   id: number
@@ -361,6 +363,9 @@ export interface Sub2PoolAccount {
   rate_limit_status?: string | null
   schedulable?: boolean
   schedulable_reason?: string | null
+  stop_source?: string | null
+  stop_reason?: string | null
+  stop_time?: string | null
   today_requests?: number | null
   current_concurrency?: number | null
   max_concurrency?: number | null

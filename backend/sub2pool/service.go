@@ -243,6 +243,9 @@ func (s *Service) Apply(ctx context.Context, targetID uint, input ApplyInput) (*
 	}
 	result, err := s.applyPreview(ctx, target, snapshot, preview, intent)
 	if err != nil {
+		if persistErr := s.recordPriorityFailure(ctx, targetID, runID, preview, err); persistErr != nil {
+			return nil, persistErr
+		}
 		return nil, err
 	}
 	event := composeEvent(snapshot, preview, previous, &result, s.cfg)
@@ -378,6 +381,9 @@ func (s *Service) Run(ctx context.Context, targetID uint) (*RunResult, error) {
 		if len(preview.Changes) > 0 {
 			apply, err := s.applyPreview(ctx, target, snapshot, preview, intent)
 			if err != nil {
+				if persistErr := s.recordPriorityFailure(ctx, targetID, runID, preview, err); persistErr != nil {
+					return nil, persistErr
+				}
 				return nil, err
 			}
 			apply.RateChangeCount = result.RateChangeCount
@@ -521,7 +527,11 @@ func (s *Service) recoverPreparedRun(
 	if len(prepared.Intent) > 0 {
 		phase, phaseErr := priorityIntentStateFor(snapshot.Accounts, prepared.Intent)
 		if phaseErr != nil {
-			return nil, true, ErrPreviewConflict
+			verifyErr := priorityIntentOperationError(snapshot.Accounts, prepared.Intent)
+			if persistErr := s.recordPriorityFailure(ctx, targetID, prepared.ID, preview, verifyErr); persistErr != nil {
+				return nil, true, persistErr
+			}
+			return nil, true, verifyErr
 		}
 		if len(preview.Guards) > 0 && phase == priorityIntentStateOld {
 			blocked = true
@@ -536,6 +546,9 @@ func (s *Service) recoverPreparedRun(
 			blocked,
 		)
 		if reconcileErr != nil {
+			if persistErr := s.recordPriorityFailure(ctx, targetID, prepared.ID, preview, reconcileErr); persistErr != nil {
+				return nil, true, persistErr
+			}
 			return nil, true, reconcileErr
 		}
 		apply = &reconciled
@@ -769,6 +782,93 @@ func (s *Service) applyPreview(
 	return s.executePriorityIntent(ctx, target, preview.TargetID, preview, intent, snapshot.Accounts, false)
 }
 
+type priorityOperationError struct {
+	public  *PublicError
+	failure ApplyItem
+}
+
+func (e *priorityOperationError) Error() string {
+	if e == nil || e.public == nil {
+		return ErrUnavailable.Error()
+	}
+	return e.public.Error()
+}
+
+func (e *priorityOperationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.public
+}
+
+func newPriorityOperationError(
+	proposal PriorityProposal,
+	stage, code string,
+	actual *int,
+	public *PublicError,
+) error {
+	return &priorityOperationError{
+		public: public,
+		failure: ApplyItem{
+			AccountID:      proposal.AccountID,
+			AccountName:    proposal.AccountName,
+			Channel:        proposal.Channel,
+			BeforePriority: proposal.CurrentPriority,
+			TargetPriority: proposal.TargetPriority,
+			AfterPriority:  cloneInt(actual),
+			Status:         "failed",
+			Stage:          stage,
+			Code:           code,
+		},
+	}
+}
+
+func (s *Service) recordPriorityFailure(
+	ctx context.Context,
+	targetID, runID uint,
+	preview PriorityPreview,
+	runErr error,
+) error {
+	var operationErr *priorityOperationError
+	if !errors.As(runErr, &operationErr) {
+		return nil
+	}
+	result := &ApplyResult{
+		TargetID:  targetID,
+		Failed:    []ApplyItem{operationErr.failure},
+		Remaining: 1,
+		Preview:   preview,
+	}
+	event := PoolEvent{
+		EventID: fmt.Sprintf(
+			"sub2-pool-%d-%d-priority-failed-%d-%s-%s",
+			targetID,
+			runID,
+			operationErr.failure.AccountID,
+			operationErr.failure.Stage,
+			operationErr.failure.Code,
+		),
+		TargetID:       targetID,
+		GeneratedAt:    time.Now(),
+		PriorityResult: result,
+	}
+	outboxID, created, err := s.auto.EnqueueRunOutbox(targetID, runID, event)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if !created || s.dispatcher == nil {
+		return nil
+	}
+	if err := s.dispatcher.DispatchPoolEvent(ctx, event); err != nil {
+		_ = s.auto.MarkOutboxDelivery(outboxID, false)
+		return nil
+	}
+	if err := s.auto.MarkOutboxDelivery(outboxID, true); err != nil {
+		return nil
+	}
+	return nil
+}
+
 // executePriorityIntent uses a persisted old -> staging -> final plan. Every
 // staging value is outside the old and final value ranges, so either phase can
 // be interrupted and resumed without introducing a duplicate priority.
@@ -787,7 +887,7 @@ func (s *Service) executePriorityIntent(
 	}
 	phase, err := priorityIntentStateFor(accounts, intent)
 	if err != nil {
-		return result, ErrPreviewConflict
+		return result, priorityIntentOperationError(accounts, intent)
 	}
 	ordered := sortedPriorityIntent(intent)
 
@@ -805,7 +905,14 @@ func (s *Service) executePriorityIntent(
 			case proposal.stagingPriority:
 				continue
 			default:
-				return result, ErrPreviewConflict
+				actualCopy := actual
+				return result, newPriorityOperationError(
+					proposal,
+					"verify",
+					"priority_mismatch",
+					&actualCopy,
+					ErrPreviewConflict,
+				)
 			}
 		}
 		phase = priorityIntentStateStaging
@@ -824,7 +931,14 @@ func (s *Service) executePriorityIntent(
 			case proposal.TargetPriority:
 				continue
 			default:
-				return result, ErrPreviewConflict
+				actualCopy := actual
+				return result, newPriorityOperationError(
+					proposal,
+					"verify",
+					"priority_mismatch",
+					&actualCopy,
+					ErrPreviewConflict,
+				)
 			}
 		}
 	}
@@ -859,10 +973,11 @@ func (s *Service) currentIntentPriority(
 	}
 	account, err := s.admin.GetPoolAccount(ctx, target, proposal.AccountID)
 	if err != nil {
-		return 0, ErrUnavailable
+		return 0, newPriorityOperationError(proposal, "read", "upstream_read_failed", nil, ErrUnavailable)
 	}
 	if !poolAccountMatchesIntent(account, proposal) {
-		return 0, ErrPreviewConflict
+		actual := account.Account.Priority
+		return 0, newPriorityOperationError(proposal, "verify", "account_changed", &actual, ErrPreviewConflict)
 	}
 	return account.Account.Priority, nil
 }
@@ -879,23 +994,40 @@ func (s *Service) writeIntentPriority(
 	}
 	account, err := s.admin.GetPoolAccount(ctx, target, proposal.AccountID)
 	if err != nil {
-		return ErrUnavailable
+		return newPriorityOperationError(proposal, "read", "upstream_read_failed", nil, ErrUnavailable)
 	}
-	if !poolAccountMatchesIntent(account, proposal) || account.Account.Priority != expectedPriority {
-		return ErrPreviewConflict
+	if !poolAccountMatchesIntent(account, proposal) {
+		actual := account.Account.Priority
+		return newPriorityOperationError(proposal, "verify", "account_changed", &actual, ErrPreviewConflict)
+	}
+	if account.Account.Priority != expectedPriority {
+		actual := account.Account.Priority
+		return newPriorityOperationError(proposal, "verify", "priority_mismatch", &actual, ErrPreviewConflict)
 	}
 	if _, err := s.admin.UpdatePoolAccountPriority(ctx, target, proposal.AccountID, nextPriority); err != nil {
-		return ErrUnavailable
+		actual := expectedPriority
+		return newPriorityOperationError(proposal, "write", "upstream_write_failed", &actual, ErrUnavailable)
 	}
 	if err := s.renewTargetLease(targetID); err != nil {
-		return err
+		actual := nextPriority
+		public := ErrUnavailable
+		var candidate *PublicError
+		if errors.As(err, &candidate) {
+			public = candidate
+		}
+		return newPriorityOperationError(proposal, "reread", "lease_lost", &actual, public)
 	}
 	after, err := s.admin.GetPoolAccount(ctx, target, proposal.AccountID)
 	if err != nil {
-		return ErrUnavailable
+		return newPriorityOperationError(proposal, "reread", "upstream_read_failed", nil, ErrUnavailable)
 	}
-	if !poolAccountMatchesIntent(after, proposal) || after.Account.Priority != nextPriority {
-		return ErrPreviewConflict
+	if !poolAccountMatchesIntent(after, proposal) {
+		actual := after.Account.Priority
+		return newPriorityOperationError(proposal, "verify", "account_changed", &actual, ErrPreviewConflict)
+	}
+	if after.Account.Priority != nextPriority {
+		actual := after.Account.Priority
+		return newPriorityOperationError(proposal, "verify", "priority_mismatch", &actual, ErrPreviewConflict)
 	}
 	return nil
 }
@@ -924,6 +1056,47 @@ func poolAccountMatchesIntent(account *sub2api.PoolAccount, proposal PriorityPro
 	}
 	identity := account.Identity()
 	return identityDigest(normalizeURL(identity.BaseURL), identity.APIKeySHA256) == proposal.expectedIdentityDigest
+}
+
+func priorityIntentOperationError(accounts []AccountSnapshot, intent []PriorityProposal) error {
+	accountsByID := make(map[int64]AccountSnapshot, len(accounts))
+	for _, account := range accounts {
+		accountsByID[account.ID] = account
+	}
+	var oldProposal *PriorityProposal
+	var finalProposal *PriorityProposal
+	for _, proposal := range sortedPriorityIntent(intent) {
+		account, exists := accountsByID[proposal.AccountID]
+		if !exists {
+			return newPriorityOperationError(proposal, "verify", "account_changed", nil, ErrPreviewConflict)
+		}
+		actual := account.CurrentPriority
+		if !preparedProposalMatchesAccount(proposal, account) {
+			return newPriorityOperationError(proposal, "verify", "account_changed", &actual, ErrPreviewConflict)
+		}
+		switch actual {
+		case proposal.CurrentPriority:
+			copy := proposal
+			oldProposal = &copy
+		case proposal.stagingPriority:
+		case proposal.TargetPriority:
+			copy := proposal
+			finalProposal = &copy
+		default:
+			return newPriorityOperationError(proposal, "verify", "priority_mismatch", &actual, ErrPreviewConflict)
+		}
+	}
+	if oldProposal != nil && finalProposal != nil {
+		actual := finalProposal.TargetPriority
+		return newPriorityOperationError(
+			*finalProposal,
+			"verify",
+			"transition_state_conflict",
+			&actual,
+			ErrPreviewConflict,
+		)
+	}
+	return ErrPreviewConflict
 }
 
 type priorityIntentState uint8
@@ -1291,6 +1464,7 @@ func (s *Service) snapshotWithCachedUpstreams(
 		if match.identityDigest != "" {
 			identityStateDigest = match.identityDigest
 		}
+		stopSource, stopReason, stopTime := accountStopDetails(account, raw.Health, snapshot.GeneratedAt)
 		item := AccountSnapshot{
 			ID:                 account.ID,
 			Name:               account.Name,
@@ -1329,6 +1503,9 @@ func (s *Service) snapshotWithCachedUpstreams(
 				TemporarilyUnschedulable: raw.Health.TemporarilyUnschedulable,
 				Overloaded:               raw.Health.Overloaded,
 			},
+			StopSource:       stopSource,
+			StopReason:       stopReason,
+			StopTime:         stopTime,
 			MatchStatus:      match.status,
 			FingerprintState: fingerprintState,
 			IdentityDigest:   identityStateDigest,
@@ -1537,6 +1714,51 @@ func skipReason(account AccountSnapshot) string {
 		return "multiplier_missing"
 	}
 	return ""
+}
+
+func accountStopDetails(
+	account sub2api.AdminAccount,
+	health sub2api.PoolAccountHealth,
+	now time.Time,
+) (string, string, *time.Time) {
+	tempActive := health.TemporarilyUnschedulable &&
+		(health.TempUnschedulableUntil == nil || health.TempUnschedulableUntil.After(now))
+	rateLimitActive := health.RateLimited &&
+		(health.RateLimitResetAt == nil || health.RateLimitResetAt.After(now))
+	overloadActive := health.Overloaded &&
+		(health.OverloadUntil == nil || health.OverloadUntil.After(now))
+	if account.Schedulable && !tempActive && !rateLimitActive && !overloadActive {
+		return "", "", nil
+	}
+
+	if tempActive {
+		if reason := sanitizeStopReason(health.TempUnschedulableReason); reason != "" {
+			return "temp_unschedulable_reason", reason, cloneTime(health.TempUnschedulableUntil)
+		}
+		if reason := sanitizeStopReason(health.ErrorMessage); reason != "" {
+			return "error_message", reason, cloneTime(health.TempUnschedulableUntil)
+		}
+		return "temporarily_unschedulable", "temporarily_unschedulable", cloneTime(health.TempUnschedulableUntil)
+	}
+	if rateLimitActive {
+		if reason := sanitizeStopReason(health.ErrorMessage); reason != "" {
+			return "error_message", reason, cloneTime(health.RateLimitResetAt)
+		}
+		return "rate_limit", "rate_limited", cloneTime(health.RateLimitResetAt)
+	}
+	if overloadActive {
+		if reason := sanitizeStopReason(health.ErrorMessage); reason != "" {
+			return "error_message", reason, cloneTime(health.OverloadUntil)
+		}
+		return "overload", "overloaded", cloneTime(health.OverloadUntil)
+	}
+	if !account.Schedulable {
+		if reason := sanitizeStopReason(health.ErrorMessage); reason != "" {
+			return "error_message", reason, nil
+		}
+		return "schedulable", "not_schedulable", nil
+	}
+	return "", "", nil
 }
 
 func trustedRateAvailable(account AccountSnapshot) bool {

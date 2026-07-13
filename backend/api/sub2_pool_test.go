@@ -59,13 +59,16 @@ func TestSub2PoolRoutesExposeOnlySafeSnapshotFields(t *testing.T) {
 				} `json:"health_coverage"`
 			} `json:"summary"`
 			Accounts []struct {
-				ID                 int64  `json:"id"`
-				HealthStatus       string `json:"health_status"`
-				RateLimitStatus    string `json:"rate_limit_status"`
-				TodayRequests      *int   `json:"today_requests"`
-				CurrentConcurrency int    `json:"current_concurrency"`
-				MaxConcurrency     int    `json:"max_concurrency"`
-				SchedulableReason  string `json:"schedulable_reason"`
+				ID                 int64      `json:"id"`
+				HealthStatus       string     `json:"health_status"`
+				RateLimitStatus    string     `json:"rate_limit_status"`
+				TodayRequests      *int       `json:"today_requests"`
+				CurrentConcurrency int        `json:"current_concurrency"`
+				MaxConcurrency     int        `json:"max_concurrency"`
+				SchedulableReason  string     `json:"schedulable_reason"`
+				StopSource         string     `json:"stop_source"`
+				StopReason         string     `json:"stop_reason"`
+				StopTime           *time.Time `json:"stop_time"`
 			} `json:"accounts"`
 		} `json:"data"`
 	}
@@ -83,7 +86,11 @@ func TestSub2PoolRoutesExposeOnlySafeSnapshotFields(t *testing.T) {
 		account.RateLimitStatus != "rate_limited" ||
 		account.TodayRequests == nil || *account.TodayRequests != 17 ||
 		account.CurrentConcurrency != 3 ||
-		account.MaxConcurrency != 8 {
+		account.MaxConcurrency != 8 ||
+		account.SchedulableReason != "not_schedulable" ||
+		account.StopSource != "error_message" ||
+		account.StopReason != "temporary stop" ||
+		account.StopTime == nil {
 		t.Fatalf("safe account dto = %#v", account)
 	}
 }
@@ -234,6 +241,7 @@ func newSub2PoolAPIStub() *sub2PoolAPIStub {
 	rate := 0.1
 	balance := 25.0
 	requests := 17
+	stopTime := now.Add(time.Hour)
 	snapshot := &sub2pool.Snapshot{
 		TargetID:    1,
 		GeneratedAt: now,
@@ -253,7 +261,7 @@ func newSub2PoolAPIStub() *sub2PoolAPIStub {
 			Platform:           "openai",
 			Type:               "api_key",
 			Status:             "active",
-			Schedulable:        true,
+			Schedulable:        false,
 			CurrentPriority:    30,
 			CurrentConcurrency: 3,
 			MaxConcurrency:     8,
@@ -265,7 +273,11 @@ func newSub2PoolAPIStub() *sub2PoolAPIStub {
 			Availability: sub2pool.Availability{
 				Matched: true, BalanceAvailable: true, TodayStatsReady: true, RateAvailable: true, Healthy: true,
 			},
-			Health: sub2pool.AccountHealth{RateLimited: true},
+			Health:     sub2pool.AccountHealth{RateLimited: true},
+			SkipReason: "not_schedulable",
+			StopSource: "error_message",
+			StopReason: "temporary stop",
+			StopTime:   &stopTime,
 		}},
 	}
 	preview := &sub2pool.PriorityPreview{

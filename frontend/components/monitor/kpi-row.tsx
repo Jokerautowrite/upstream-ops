@@ -1,7 +1,6 @@
 "use client"
 
 import { ArrowUpRight, DollarSign, MessageSquare, Wallet } from "lucide-react"
-import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import { useDashboardSummary, useRateChanges } from "@/lib/queries"
 import { money } from "@/lib/format"
@@ -123,22 +122,26 @@ export function KpiRow() {
   ]
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
-      {kpis.map((k) => (
-        <Card
+    <section className="grid grid-cols-2 overflow-hidden rounded-lg border border-border bg-card shadow-[var(--shadow-card)] md:grid-cols-5">
+      {kpis.map((k, index) => (
+        <div
           key={k.label}
-          className="flex flex-row items-start justify-between gap-2 border border-border p-3 shadow-none sm:p-4"
+          className={cn(
+            "flex min-w-0 items-start justify-between gap-2 border-b border-border p-3 sm:p-3.5 md:min-h-27 md:border-b-0 md:border-r",
+            index % 2 === 0 && index !== kpis.length - 1 && "border-r",
+            index === kpis.length - 1 && "col-span-2 border-b-0 md:col-span-1 md:border-r-0",
+          )}
         >
           <div className="flex min-w-0 flex-col">
-            <span className="text-xs text-muted-foreground">{k.label}</span>
-            <p className="mt-1 text-xl font-bold tracking-tight text-foreground sm:text-2xl">{k.value}</p>
-            <p className="mt-1 min-w-0 text-xs">{k.footer}</p>
+            <span className="text-[11px] font-medium text-muted-foreground">{k.label}</span>
+            <p className="mt-1 text-xl font-semibold tabular-nums text-foreground">{k.value}</p>
+            <p className="mt-1.5 min-w-0 text-[11px] leading-4">{k.footer}</p>
           </div>
-          <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl sm:size-10", k.iconBg)}>
-            <k.icon className={cn("size-5", k.iconColor)} />
+          <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-md", k.iconBg)}>
+            <k.icon className={cn("size-3.5", k.iconColor)} />
           </span>
-        </Card>
+        </div>
       ))}
-    </div>
+    </section>
   )
 }

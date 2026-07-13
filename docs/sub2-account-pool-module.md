@@ -21,8 +21,13 @@ UpstreamOps v0.0.6.
   first and debt accounts come last.
 - Missing multiplier or balance data is skipped and reported instead of
   stopping other eligible accounts.
-- Rate changes and priority results are combined into one dedicated
-  `sub2_pool_changed` notification.
+- Existing `sub2_pool_changed` subscriptions remain compatible with combined
+  account-pool notifications.
+- Verified priority outcomes also support explicit opt-in events:
+  `sub2_pool_priority_applied` and `sub2_pool_priority_failed`. Their messages
+  never include missing-data, balance, guard, or rate-change sections.
+- Snapshots expose sanitized `stop_source`, `stop_reason`, and `stop_time`
+  fields without changing the writable Sub2 admin-account request model.
 
 ## Safety
 
@@ -39,6 +44,13 @@ UpstreamOps v0.0.6.
   never expose duplicate priorities and can resume safely after a restart.
 - Prepared runs, target state, notifications, and target leases are persisted
   so a process restart does not blindly replay an already completed write.
+- Priority write, re-read, and verification failures are queued with stable
+  stage/code values and no raw upstream response body. A failed prepared run
+  remains recoverable; notification delivery retries only the outbox event.
+- Stop reasons are sanitized before persistence: controls are removed, URLs
+  and common credential forms are redacted, and output is limited to 512
+  UTF-8-safe bytes. Stale reasons on schedulable accounts and expired temporary
+  reasons are omitted.
 - Six additive SQLite/MySQL tables are created on startup:
   `sub2_pool_target_states`, `sub2_pool_outbox`, `sub2_pool_runs`, and
   `sub2_pool_automation`, plus `sub2_pool_leases` and
