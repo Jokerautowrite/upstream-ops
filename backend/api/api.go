@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/bejix/upstream-ops/backend/channel"
@@ -119,21 +120,35 @@ func registerFrontend(r *gin.Engine, dist fs.FS) {
 	fileServer := http.FileServer(http.FS(dist))
 
 	r.NoRoute(func(c *gin.Context) {
-		path := c.Request.URL.Path
+		requestPath := c.Request.URL.Path
 
 		// 永远不让 SPA fallback 覆盖 API / 健康检查路径。
-		if strings.HasPrefix(path, "/api/") || path == "/healthz" {
+		if strings.HasPrefix(requestPath, "/api/") || requestPath == "/healthz" {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
 
-		// 文件存在就直接 serve，否则回落到 index.html。
-		clean := strings.TrimPrefix(path, "/")
+		// 文件存在就直接 serve。缺失的静态资源必须返回 404，只有无扩展名的
+		// 客户端路由才能回落到 index.html。
+		clean := strings.TrimPrefix(requestPath, "/")
 		if clean == "" {
 			clean = "index.html"
 		}
 		if _, err := fs.Stat(dist, clean); err != nil {
+			if strings.HasPrefix(clean, "assets/") || path.Ext(clean) != "" {
+				c.AbortWithStatus(http.StatusNotFound)
+				return
+			}
 			c.Request.URL.Path = "/"
+			c.Header("Cache-Control", "no-cache")
+		} else if clean == "index.html" {
+			c.Header("Cache-Control", "no-cache")
+		} else if strings.HasPrefix(clean, "assets/") {
+			c.Header("Cache-Control", "public, max-age=31536000, immutable")
 		}
 		fileServer.ServeHTTP(c.Writer, c.Request)
 	})

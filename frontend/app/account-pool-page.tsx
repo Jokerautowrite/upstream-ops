@@ -382,18 +382,30 @@ export default function AccountPoolPage() {
     setApplying(true)
     setApplyConflict(null)
     try {
+      const applyTargetID = preview.target_id || targetID || ""
       const result = await apiFetch<Sub2PoolPriorityApplyResult>(
-        `/sub2-pool/targets/${encodeURIComponent(preview.target_id || targetID || "")}/apply`,
+        `/sub2-pool/targets/${encodeURIComponent(applyTargetID)}/apply`,
         {
           method: "POST",
           body: JSON.stringify({ snapshot_signature: preview.snapshot_signature }),
         },
       )
+      let refreshed = false
+      try {
+        const data = await apiFetch<NonNullable<typeof snapshot.data>>(
+          `/sub2-pool/targets/${encodeURIComponent(applyTargetID)}/snapshot/refresh-base`,
+          { method: "POST" },
+        )
+        snapshot.setData(data)
+        automation.refetch()
+        refreshed = true
+      } catch {
+        toast.warning("优先级已处理，但列表刷新失败，请手动刷新账号池")
+      }
       if (result.summary?.combined_result === "partial" || (result.failed?.length ?? 0) > 0) {
-        const message = `部分写入成功，${result.failed?.length ?? 0} 个账号未完成。请刷新后重新生成预览。`
+        const message = `部分写入成功，${result.failed?.length ?? 0} 个账号未完成。${refreshed ? "请重新生成预览。" : "请手动刷新后重新生成预览。"}`
         setApplyConflict(message)
         toast.error(message)
-        triggerRefresh()
         return
       }
       toast.success(result.message || "已应用优先级预览")

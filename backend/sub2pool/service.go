@@ -691,6 +691,9 @@ func (s *Service) DispatchPending(ctx context.Context, targetID uint, limit int)
 			result.Failed++
 			continue
 		}
+		if item.RunID != 0 {
+			_ = s.auto.UpdateRunNotification(item.RunID, "sent")
+		}
 		result.Delivered++
 	}
 	return result, nil
@@ -1925,8 +1928,7 @@ func hasEventSignal(event PoolEvent) bool {
 		len(event.Guards) > 0 {
 		return true
 	}
-	return event.PriorityResult != nil &&
-		(len(event.PriorityResult.Applied) > 0 || len(event.PriorityResult.Failed) > 0)
+	return len(realPriorityAppliedItems(event)) > 0 || len(realPriorityFailedItems(event)) > 0
 }
 
 func runRecordFor(result *RunResult, status string) RunRecord {

@@ -53,7 +53,9 @@ func (s *Subscription) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// ParseSubscriptions 容错解析 JSON 数组；空串或解析失败均返回 nil（视为"订阅一切"）。
+// ParseSubscriptions parses one notification subscription list. Empty values
+// keep the legacy wildcard behavior; malformed JSON returns an error so callers
+// can fail closed instead of unexpectedly broadcasting every event.
 func ParseSubscriptions(raw string) ([]Subscription, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" || s == "null" {

@@ -24,7 +24,7 @@ func TestPoolPriorityMessagesAreExplicitAndDoNotMixGenericSignals(t *testing.T) 
 		},
 	}
 	messages := poolEventMessages(event)
-	if len(messages) != 2 {
+	if len(messages) != 3 {
 		t.Fatalf("messages = %#v", messages)
 	}
 	applied := messageByEvent(messages, storage.EventSub2PoolPriorityApplied)
@@ -36,11 +36,20 @@ func TestPoolPriorityMessagesAreExplicitAndDoNotMixGenericSignals(t *testing.T) 
 			t.Fatalf("explicit applied message mixed %q: %s", forbidden, applied.Body)
 		}
 	}
-	generic := messageByEvent(messages, storage.EventSub2PoolChanged)
-	if generic == nil ||
-		len(generic.SkipIfExplicitlySubscribed) != 1 ||
-		generic.SkipIfExplicitlySubscribed[0] != storage.EventSub2PoolPriorityApplied {
-		t.Fatalf("generic compatibility message = %#v", generic)
+	generic := messagesByEvent(messages, storage.EventSub2PoolChanged)
+	if len(generic) != 2 {
+		t.Fatalf("generic messages = %#v", generic)
+	}
+	if len(generic[0].SkipIfExplicitlySubscribed) != 0 ||
+		!strings.Contains(generic[0].Body, "倍率变化") ||
+		strings.Contains(generic[0].Body, "优先级调整") {
+		t.Fatalf("non-priority generic message = %#v", generic[0])
+	}
+	if len(generic[1].SkipIfExplicitlySubscribed) != 1 ||
+		generic[1].SkipIfExplicitlySubscribed[0] != storage.EventSub2PoolPriorityApplied ||
+		!strings.Contains(generic[1].Body, "优先级调整") ||
+		strings.Contains(generic[1].Body, "倍率变化") {
+		t.Fatalf("priority compatibility message = %#v", generic[1])
 	}
 }
 
@@ -95,4 +104,14 @@ func messageByEvent(messages []notify.Message, event storage.NotificationEvent) 
 		}
 	}
 	return nil
+}
+
+func messagesByEvent(messages []notify.Message, event storage.NotificationEvent) []notify.Message {
+	out := make([]notify.Message, 0)
+	for index := range messages {
+		if messages[index].Event == event {
+			out = append(out, messages[index])
+		}
+	}
+	return out
 }

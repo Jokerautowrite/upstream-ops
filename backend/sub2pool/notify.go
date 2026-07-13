@@ -37,15 +37,14 @@ func (n *NotifyAdapter) DispatchPoolEvent(ctx context.Context, event PoolEvent) 
 func poolEventMessages(event PoolEvent) []notify.Message {
 	applied := realPriorityAppliedItems(event)
 	failed := realPriorityFailedItems(event)
-	explicitEvents := make([]storage.NotificationEvent, 0, 2)
-	messages := make([]notify.Message, 0, 3)
+	messages := make([]notify.Message, 0, 5)
 	if len(applied) > 0 {
-		explicitEvents = append(explicitEvents, storage.EventSub2PoolPriorityApplied)
 		messages = append(messages, notify.Message{
-			Event:     storage.EventSub2PoolPriorityApplied,
-			ChannelID: 0,
-			Subject:   "Sub2 优先级调整成功",
-			Body:      priorityAppliedBody(applied),
+			Event:             storage.EventSub2PoolPriorityApplied,
+			ChannelID:         0,
+			Subject:           "Sub2 优先级调整成功",
+			Body:              priorityAppliedBody(applied),
+			RequireSubscriber: true,
 			Extra: map[string]any{
 				"event_id":  event.EventID,
 				"target_id": event.TargetID,
@@ -54,12 +53,12 @@ func poolEventMessages(event PoolEvent) []notify.Message {
 		})
 	}
 	if len(failed) > 0 {
-		explicitEvents = append(explicitEvents, storage.EventSub2PoolPriorityFailed)
 		messages = append(messages, notify.Message{
-			Event:     storage.EventSub2PoolPriorityFailed,
-			ChannelID: 0,
-			Subject:   "Sub2 优先级调整失败",
-			Body:      priorityFailedBody(failed),
+			Event:             storage.EventSub2PoolPriorityFailed,
+			ChannelID:         0,
+			Subject:           "Sub2 优先级调整失败",
+			Body:              priorityFailedBody(failed),
+			RequireSubscriber: true,
 			Extra: map[string]any{
 				"event_id":  event.EventID,
 				"target_id": event.TargetID,
@@ -67,13 +66,15 @@ func poolEventMessages(event PoolEvent) []notify.Message {
 			},
 		})
 	}
-	if hasEventSignal(event) {
+
+	nonPriority := event
+	nonPriority.PriorityResult = nil
+	if hasEventSignal(nonPriority) {
 		messages = append(messages, notify.Message{
-			Event:                      storage.EventSub2PoolChanged,
-			ChannelID:                  0,
-			Subject:                    poolEventSubject(event),
-			Body:                       poolEventBody(event),
-			SkipIfExplicitlySubscribed: explicitEvents,
+			Event:     storage.EventSub2PoolChanged,
+			ChannelID: 0,
+			Subject:   poolEventSubject(nonPriority),
+			Body:      poolEventBody(nonPriority),
 			Extra: map[string]any{
 				"event_id":           event.EventID,
 				"target_id":          event.TargetID,
@@ -82,6 +83,46 @@ func poolEventMessages(event PoolEvent) []notify.Message {
 				"missing_balance":    len(event.MissingBalanceIDs),
 				"low_balances":       len(event.LowBalances),
 				"guards":             len(event.Guards),
+			},
+		})
+	}
+	if len(applied) > 0 {
+		compatibility := event
+		compatibility.RateChanges = nil
+		compatibility.MissingMultiplierIDs = nil
+		compatibility.MissingBalanceIDs = nil
+		compatibility.LowBalances = nil
+		compatibility.Guards = nil
+		compatibility.PriorityResult = &ApplyResult{Applied: applied}
+		messages = append(messages, notify.Message{
+			Event:                      storage.EventSub2PoolChanged,
+			ChannelID:                  0,
+			Subject:                    poolEventSubject(compatibility),
+			Body:                       poolEventBody(compatibility),
+			SkipIfExplicitlySubscribed: []storage.NotificationEvent{storage.EventSub2PoolPriorityApplied},
+			Extra: map[string]any{
+				"event_id":  event.EventID,
+				"target_id": event.TargetID,
+			},
+		})
+	}
+	if len(failed) > 0 {
+		compatibility := event
+		compatibility.RateChanges = nil
+		compatibility.MissingMultiplierIDs = nil
+		compatibility.MissingBalanceIDs = nil
+		compatibility.LowBalances = nil
+		compatibility.Guards = nil
+		compatibility.PriorityResult = &ApplyResult{Failed: failed}
+		messages = append(messages, notify.Message{
+			Event:                      storage.EventSub2PoolChanged,
+			ChannelID:                  0,
+			Subject:                    poolEventSubject(compatibility),
+			Body:                       poolEventBody(compatibility),
+			SkipIfExplicitlySubscribed: []storage.NotificationEvent{storage.EventSub2PoolPriorityFailed},
+			Extra: map[string]any{
+				"event_id":  event.EventID,
+				"target_id": event.TargetID,
 			},
 		})
 	}

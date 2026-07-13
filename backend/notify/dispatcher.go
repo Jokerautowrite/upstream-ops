@@ -146,7 +146,11 @@ func (d *Dispatcher) DispatchRateEventBatch(ctx context.Context, channel *storag
 	var errs []error
 	for i := range notifyChannels {
 		nch := notifyChannels[i]
-		subs, _ := ParseSubscriptions(nch.Subscriptions)
+		subs, parseErr := ParseSubscriptions(nch.Subscriptions)
+		if parseErr != nil {
+			errs = append(errs, fmt.Errorf("parse subscriptions for %s: %w", nch.Name, parseErr))
+			continue
+		}
 
 		// 切出该通知渠道关心的 changes 子集。
 		matching := subsetForSubscriptions(channel.ID, event, filtered, subs)
@@ -187,7 +191,11 @@ func (d *Dispatcher) DispatchRateStructureBatch(ctx context.Context, channel *st
 	var errs []error
 	for i := range notifyChannels {
 		nch := notifyChannels[i]
-		subs, _ := ParseSubscriptions(nch.Subscriptions)
+		subs, parseErr := ParseSubscriptions(nch.Subscriptions)
+		if parseErr != nil {
+			errs = append(errs, fmt.Errorf("parse subscriptions for %s: %w", nch.Name, parseErr))
+			continue
+		}
 		matching := RateStructureChange{
 			Added:   subsetForSubscriptions(channel.ID, storage.EventRateStructureChanged, change.Added, subs),
 			Removed: subsetForSubscriptions(channel.ID, storage.EventRateStructureChanged, change.Removed, subs),
@@ -270,21 +278,33 @@ func (d *Dispatcher) fanout(ctx context.Context, msg Message, extraFilter func(*
 		return err
 	}
 	if len(channels) == 0 {
+		if msg.RequireSubscriber {
+			return fmt.Errorf("no enabled notification channel for %s", msg.Event)
+		}
 		return nil
 	}
 	var errs []error
+	matched := 0
 	for i := range channels {
 		ch := channels[i]
-		subs, _ := ParseSubscriptions(ch.Subscriptions)
+		subs, parseErr := ParseSubscriptions(ch.Subscriptions)
+		if parseErr != nil {
+			errs = append(errs, fmt.Errorf("parse subscriptions for %s: %w", ch.Name, parseErr))
+			continue
+		}
 		if !MatchesMessageSubscriptions(subs, msg) {
 			continue
 		}
 		if extraFilter != nil && !extraFilter(&ch) {
 			continue
 		}
+		matched++
 		if err := d.sendOne(ctx, &ch, msg); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if msg.RequireSubscriber && matched == 0 {
+		errs = append(errs, fmt.Errorf("no notification channel subscribes to %s", msg.Event))
 	}
 	return errors.Join(errs...)
 }

@@ -26,6 +26,7 @@ type Message struct {
 	Body                       string
 	Extra                      map[string]any
 	SkipIfExplicitlySubscribed []storage.NotificationEvent
+	RequireSubscriber          bool
 }
 
 // Notifier 通知渠道抽象。
