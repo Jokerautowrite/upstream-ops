@@ -45,15 +45,20 @@ type accountRateMapEntry struct {
 }
 
 type observedAccountRate struct {
-	channelName string
-	modelName   string
-	ratio       float64
-	active      bool
+	channelID     uint
+	normalizedURL string
+	channelName   string
+	modelName     string
+	ratio         float64
+	active        bool
 }
 
 var accountLabelRatePattern = regexp.MustCompile(
 	`(?i)(pro|plus|cc|kiro|gemini|grok|g|图|生图)\s*([0-9]+(?:\s*\.\s*[0-9]+)?)`,
 )
+var accountDiscountRatePattern = regexp.MustCompile(`(?i)([0-9]+(?:\s*\.\s*[0-9]+)?)\s*折`)
+var accountCentRatePattern = regexp.MustCompile(`(?i)([0-9]+(?:\s*\.\s*[0-9]+)?)\s*分`)
+var accountLabelTokenPattern = regexp.MustCompile(`[\p{L}\p{Han}]+`)
 
 func (s *GormStateStore) ListAccountRateMappings(targetID uint) ([]AccountRateMapping, error) {
 	var rows []GormPoolAccountRateMapping
@@ -154,6 +159,26 @@ func resolveAccountRateMappings(
 	channels ChannelStore,
 	rates RateSnapshotStore,
 ) map[int64]float64 {
+	return resolveAccountRateMappingsWithGroups(
+		ctx,
+		targetID,
+		accounts,
+		nil,
+		store,
+		channels,
+		rates,
+	)
+}
+
+func resolveAccountRateMappingsWithGroups(
+	ctx context.Context,
+	targetID uint,
+	accounts []sub2api.PoolAccount,
+	groups []sub2api.AdminGroup,
+	store AccountRateMappingStore,
+	channels ChannelStore,
+	rates RateSnapshotStore,
+) map[int64]float64 {
 	out := make(map[int64]float64)
 	if store == nil || channels == nil || rates == nil {
 		return out
@@ -164,15 +189,13 @@ func resolveAccountRateMappings(
 	}
 	accountURL := make(map[int64]string, len(accounts))
 	for _, account := range accounts {
-		accountURL[account.Account.ID] = normalizeURL(account.Identity().BaseURL)
+		accountURL[account.Account.ID] = normalizeMappingURL(account.Identity().BaseURL)
 	}
 	monitorChannels, err := channels.List()
 	if err != nil {
 		return out
 	}
-	activeRatesByURL := make(map[string]map[string][]float64)
-	allRatesByURL := make(map[string]map[string][]float64)
-	observedRatesByURL := make(map[string][]observedAccountRate)
+	observedRates := make([]observedAccountRate, 0)
 	for _, channel := range monitorChannels {
 		normalized := normalizeURL(channel.SiteURL)
 		if normalized == "" {
@@ -187,39 +210,25 @@ func resolveAccountRateMappings(
 			if modelName == "" {
 				continue
 			}
-			if allRatesByURL[normalized] == nil {
-				allRatesByURL[normalized] = make(map[string][]float64)
-			}
-			observedRatesByURL[normalized] = append(
-				observedRatesByURL[normalized],
+			observedRates = append(
+				observedRates,
 				observedAccountRate{
-					channelName: channel.Name,
-					modelName:   modelName,
-					ratio:       snapshot.Ratio,
-					active:      channel.MonitorEnabled,
+					channelID:     channel.ID,
+					normalizedURL: normalized,
+					channelName:   channel.Name,
+					modelName:     modelName,
+					ratio:         snapshot.Ratio,
+					active:        channel.MonitorEnabled,
 				},
 			)
-			allRatesByURL[normalized][modelName] = append(
-				allRatesByURL[normalized][modelName],
-				snapshot.Ratio,
-			)
-			if channel.MonitorEnabled {
-				if activeRatesByURL[normalized] == nil {
-					activeRatesByURL[normalized] = make(map[string][]float64)
-				}
-				activeRatesByURL[normalized][modelName] = append(
-					activeRatesByURL[normalized][modelName],
-					snapshot.Ratio,
-				)
-			}
 		}
 	}
 	for _, mapping := range mappings {
 		if err := ctx.Err(); err != nil {
 			return out
 		}
-		normalized := normalizeURL(mapping.SiteURL)
-		if normalized == "" || normalized != accountURL[mapping.AccountID] {
+		normalized := normalizeMappingURL(mapping.SiteURL)
+		if normalized == "" || !mappingURLsEqual(normalized, accountURL[mapping.AccountID]) {
 			continue
 		}
 		modelName := normalizeModelName(mapping.ModelName)
@@ -227,11 +236,14 @@ func resolveAccountRateMappings(
 			continue
 		}
 
-		values := activeRatesByURL[normalized][modelName]
-		if len(values) == 0 {
-			// A disabled duplicate may still hold the last useful group
-			// snapshot. Prefer live channels, but keep this as a fallback.
-			values = allRatesByURL[normalized][modelName]
+		candidates := preferActiveObservedRates(
+			observedRatesForURL(observedRates, normalized),
+		)
+		values := make([]float64, 0, len(candidates))
+		for _, candidate := range candidates {
+			if candidate.modelName == modelName {
+				values = append(values, candidate.ratio)
+			}
 		}
 		if rate, unique := uniqueMappedRate(values); unique {
 			out[mapping.AccountID] = rate
@@ -243,40 +255,76 @@ func resolveAccountRateMappings(
 		if _, exists := out[account.Account.ID]; exists {
 			continue
 		}
-		normalized := accountURL[account.Account.ID]
-		if rate, ok := resolveAccountLabelRate(account.Account.Name, observedRatesByURL[normalized]); ok {
+		normalized := normalizeMappingURL(account.Identity().BaseURL)
+		nameCandidates := observedRatesForExactChannelName(account.Account.Name, observedRates)
+		if urlCandidates := observedRatesForURL(observedRates, normalized); len(urlCandidates) > 0 {
+			if narrowed := intersectObservedRates(nameCandidates, urlCandidates); len(narrowed) > 0 {
+				nameCandidates = narrowed
+			}
+		}
+		if rate, ok := resolveObservedAccountRate(
+			account.Account.Name,
+			nameCandidates,
+			len(nameCandidates) > 0,
+		); ok {
 			out[account.Account.ID] = rate
+			continue
+		}
+
+		identityCandidates := observedRatesForIdentity(account.Account.Name, observedRates)
+		if urlCandidates := observedRatesForURL(observedRates, normalized); len(urlCandidates) > 0 {
+			if narrowed := intersectObservedRates(identityCandidates, urlCandidates); len(narrowed) > 0 {
+				identityCandidates = narrowed
+			}
+		}
+		if rate, ok := resolveObservedAccountRate(account.Account.Name, identityCandidates, false); ok {
+			out[account.Account.ID] = rate
+			continue
+		}
+
+		if rate, ok := resolveObservedAccountRate(
+			account.Account.Name,
+			observedRatesForURL(observedRates, normalized),
+			false,
+		); ok {
+			out[account.Account.ID] = rate
+			continue
+		}
+
+		// Keep a numeric account/group label visible while the monitor channel
+		// is unavailable. These values remain display-only and cannot drive
+		// automatic priority changes.
+		if hint, ok := accountLabelRateHint(account.Account.Name); ok {
+			out[account.Account.ID] = hint
+			continue
+		}
+		if hint, ok := accountGroupRateHint(account, groups); ok {
+			out[account.Account.ID] = hint
 		}
 	}
 	return out
 }
 
-func resolveAccountLabelRate(accountName string, candidates []observedAccountRate) (float64, bool) {
+func resolveObservedAccountRate(
+	accountName string,
+	candidates []observedAccountRate,
+	exactLabel bool,
+) (float64, bool) {
 	if strings.TrimSpace(accountName) == "" || len(candidates) == 0 {
 		return 0, false
 	}
-	active := make([]observedAccountRate, 0, len(candidates))
-	for _, candidate := range candidates {
-		if candidate.active {
-			active = append(active, candidate)
-		}
-	}
-	if len(active) > 0 {
-		candidates = active
-	}
+	candidates = preferActiveObservedRates(candidates)
 
-	accountLabel := normalizeLabel(accountName)
-	channelMatched := make([]observedAccountRate, 0, len(candidates))
-	for _, candidate := range candidates {
-		for _, part := range strings.Split(candidate.channelName, "/") {
-			if accountLabel != "" && accountLabel == normalizeLabel(part) {
-				channelMatched = append(channelMatched, candidate)
-				break
+	if hint, ok := accountLabelRateHint(accountName); ok {
+		rateMatched := make([]observedAccountRate, 0, len(candidates))
+		for _, candidate := range candidates {
+			if candidate.ratio == hint {
+				rateMatched = append(rateMatched, candidate)
 			}
 		}
-	}
-	if len(channelMatched) > 0 {
-		candidates = channelMatched
+		if rate, unique := uniqueObservedRate(rateMatched); unique {
+			return rate, true
+		}
 	}
 
 	if category := accountLabelCategory(accountName); category != "" {
@@ -292,23 +340,169 @@ func resolveAccountLabelRate(accountName string, candidates []observedAccountRat
 	}
 
 	if hint, ok := accountLabelRateHint(accountName); ok {
-		rateMatched := make([]observedAccountRate, 0, len(candidates))
-		for _, candidate := range candidates {
-			if candidate.ratio == hint {
-				rateMatched = append(rateMatched, candidate)
-			}
+		if exactLabel {
+			return hint, true
 		}
-		if len(rateMatched) == 0 {
-			return 0, false
-		}
-		candidates = rateMatched
 	}
 
 	return uniqueObservedRate(candidates)
 }
 
+func observedRatesForExactChannelName(
+	accountName string,
+	candidates []observedAccountRate,
+) []observedAccountRate {
+	accountLabel := normalizeLabel(accountName)
+	if accountLabel == "" {
+		return nil
+	}
+	out := make([]observedAccountRate, 0)
+	for _, candidate := range candidates {
+		for _, part := range strings.Split(candidate.channelName, "/") {
+			if accountLabel == normalizeLabel(part) {
+				out = append(out, candidate)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func observedRatesForIdentity(
+	accountName string,
+	candidates []observedAccountRate,
+) []observedAccountRate {
+	identityTokens := labelIdentityTokens(accountName)
+	if len(identityTokens) == 0 {
+		return nil
+	}
+	channelIDs := make(map[uint]struct{})
+	for _, candidate := range candidates {
+		for _, part := range strings.Split(candidate.channelName, "/") {
+			if sharesIdentityToken(identityTokens, labelIdentityTokens(part)) {
+				channelIDs[candidate.channelID] = struct{}{}
+				break
+			}
+		}
+	}
+	if len(channelIDs) != 1 {
+		return nil
+	}
+	out := make([]observedAccountRate, 0)
+	for _, candidate := range candidates {
+		if _, ok := channelIDs[candidate.channelID]; ok {
+			out = append(out, candidate)
+		}
+	}
+	return out
+}
+
+func intersectObservedRates(
+	left []observedAccountRate,
+	right []observedAccountRate,
+) []observedAccountRate {
+	if len(left) == 0 || len(right) == 0 {
+		return nil
+	}
+	channelIDs := make(map[uint]struct{})
+	for _, candidate := range right {
+		channelIDs[candidate.channelID] = struct{}{}
+	}
+	out := make([]observedAccountRate, 0)
+	for _, candidate := range left {
+		if _, ok := channelIDs[candidate.channelID]; ok {
+			out = append(out, candidate)
+		}
+	}
+	return out
+}
+
+func preferActiveObservedRates(candidates []observedAccountRate) []observedAccountRate {
+	active := make([]observedAccountRate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.active {
+			active = append(active, candidate)
+		}
+	}
+	if len(active) > 0 {
+		return active
+	}
+	return candidates
+}
+
+func observedRatesForURL(
+	candidates []observedAccountRate,
+	normalizedURL string,
+) []observedAccountRate {
+	if normalizedURL == "" {
+		return nil
+	}
+	out := make([]observedAccountRate, 0)
+	for _, candidate := range candidates {
+		if mappingURLsEqual(normalizedURL, candidate.normalizedURL) {
+			out = append(out, candidate)
+		}
+	}
+	return out
+}
+
+func labelIdentityTokens(value string) []string {
+	ignored := map[string]struct{}{
+		"api": {}, "cc": {}, "gemini": {}, "grok": {}, "gpt": {},
+		"image": {}, "kiro": {}, "openai": {}, "plus": {}, "pro": {},
+		"claude": {}, "生图": {}, "专用": {}, "渠道": {}, "号池": {},
+		"高缓存": {}, "高缓": {}, "特惠": {}, "推荐": {}, "纯血": {},
+		"官方": {}, "自用": {}, "限时": {}, "混池": {},
+	}
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	for _, token := range accountLabelTokenPattern.FindAllString(
+		strings.ToLower(value),
+		-1,
+	) {
+		if _, skip := ignored[token]; skip || len([]rune(token)) < 2 {
+			continue
+		}
+		if _, exists := seen[token]; exists {
+			continue
+		}
+		seen[token] = struct{}{}
+		out = append(out, token)
+	}
+	return out
+}
+
+func sharesIdentityToken(left, right []string) bool {
+	for _, l := range left {
+		for _, r := range right {
+			if l == r {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func normalizeLabel(value string) string {
 	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
+}
+
+func normalizeMappingURL(value string) string {
+	normalized := normalizeURL(value)
+	if normalized == "" {
+		return ""
+	}
+	parts := strings.SplitN(normalized, "://", 2)
+	if len(parts) != 2 {
+		return normalized
+	}
+	return parts[0] + "://" + strings.TrimPrefix(parts[1], "api.")
+}
+
+func mappingURLsEqual(left, right string) bool {
+	left = normalizeMappingURL(left)
+	right = normalizeMappingURL(right)
+	return left != "" && left == right
 }
 
 func accountLabelCategory(value string) string {
@@ -367,20 +561,64 @@ func modelMatchesAccountCategory(model, category string) bool {
 
 func accountLabelRateHint(value string) (float64, bool) {
 	match := accountLabelRatePattern.FindStringSubmatch(value)
-	if len(match) != 3 {
-		return 0, false
-	}
-	raw := strings.ReplaceAll(strings.TrimSpace(match[2]), " ", "")
-	if strings.Contains(raw, ".") {
+	if len(match) == 3 {
+		raw := strings.ReplaceAll(strings.TrimSpace(match[2]), " ", "")
+		if strings.Contains(raw, ".") {
+			rate, err := strconv.ParseFloat(raw, 64)
+			return rate, err == nil && rate >= 0 && rate <= 10
+		}
+		if strings.HasPrefix(raw, "0") && len(raw) > 1 {
+			value, err := strconv.Atoi(raw)
+			return float64(value) / 100, err == nil && value >= 0 && value <= 100
+		}
 		rate, err := strconv.ParseFloat(raw, 64)
 		return rate, err == nil && rate >= 0 && rate <= 10
 	}
-	if strings.HasPrefix(raw, "0") && len(raw) > 1 {
-		value, err := strconv.Atoi(raw)
-		return float64(value) / 100, err == nil && value >= 0 && value <= 100
+	if match := accountDiscountRatePattern.FindStringSubmatch(value); len(match) == 2 {
+		rate, err := strconv.ParseFloat(strings.ReplaceAll(match[1], " ", ""), 64)
+		return rate / 10, err == nil && rate > 0 && rate <= 100
 	}
-	rate, err := strconv.ParseFloat(raw, 64)
-	return rate, err == nil && rate >= 0 && rate <= 10
+	if match := accountCentRatePattern.FindStringSubmatch(value); len(match) == 2 {
+		rate, err := strconv.ParseFloat(strings.ReplaceAll(match[1], " ", ""), 64)
+		return rate / 100, err == nil && rate > 0 && rate <= 100
+	}
+	return 0, false
+}
+
+func accountGroupRateHint(
+	account sub2api.PoolAccount,
+	groups []sub2api.AdminGroup,
+) (float64, bool) {
+	if len(account.Account.GroupIDs) == 0 || len(groups) == 0 {
+		return 0, false
+	}
+	groupIDs := make(map[int64]struct{}, len(account.Account.GroupIDs))
+	for _, id := range account.Account.GroupIDs {
+		groupIDs[id] = struct{}{}
+	}
+	hints := make([]float64, 0)
+	for _, group := range groups {
+		if _, ok := groupIDs[group.ID]; !ok {
+			continue
+		}
+		if hint, ok := accountLabelRateHint(group.Name); ok {
+			hints = append(hints, hint)
+		}
+	}
+	return uniqueFloatRate(hints)
+}
+
+func uniqueFloatRate(values []float64) (float64, bool) {
+	if len(values) == 0 {
+		return 0, false
+	}
+	first := values[0]
+	for _, value := range values[1:] {
+		if value != first {
+			return 0, false
+		}
+	}
+	return first, true
 }
 
 func uniqueObservedRate(values []observedAccountRate) (float64, bool) {

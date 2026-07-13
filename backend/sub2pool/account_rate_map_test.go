@@ -144,6 +144,79 @@ func TestResolveAccountRateMappingsUsesAccountLabelAndObservedRate(t *testing.T)
 	}
 }
 
+func TestResolveAccountRateMappingsUsesURLAliasForExplicitMapping(t *testing.T) {
+	resolved := resolveAccountRateMappings(
+		context.Background(),
+		1,
+		[]sub2api.PoolAccount{
+			poolAccountNamedForRateMap(5834, "https://mhapi.cn", "kiro 0.08 梦幻"),
+		},
+		staticAccountRateMappings{items: []AccountRateMapping{{
+			AccountID: 5834,
+			SiteURL:   "https://mhapi.cn",
+			ModelName: "Claude Kiro 有缓",
+		}}},
+		staticChannels{items: []storage.Channel{{
+			ID:             22,
+			Name:           "CC 0.7 梦幻 / Pro 0.11 梦幻 / Plus 0.04梦幻",
+			SiteURL:        "https://api.mhapi.cn",
+			MonitorEnabled: true,
+		}}},
+		staticRateSnapshots{items: map[uint][]storage.RateSnapshot{
+			22: {{ChannelID: 22, ModelName: "Claude Kiro 有缓", Ratio: 0.08}},
+		}},
+	)
+	if resolved[5834] != 0.08 {
+		t.Fatalf("URL alias mapping = %#v, want account 5834 at 0.08", resolved)
+	}
+}
+
+func TestResolveAccountRateMappingsUsesSharedChannelIdentity(t *testing.T) {
+	resolved := resolveAccountRateMappings(
+		context.Background(),
+		1,
+		[]sub2api.PoolAccount{
+			poolAccountNamedForRateMap(5905, "https://r.l.cd", "Plus 0.035 吱吱鼠"),
+		},
+		staticAccountRateMappings{},
+		staticChannels{items: []storage.Channel{{
+			ID:             12,
+			Name:           "Pro 0.12 吱吱鼠",
+			SiteURL:        "https://gptplus.pp.ua",
+			MonitorEnabled: true,
+		}}},
+		staticRateSnapshots{items: map[uint][]storage.RateSnapshot{
+			12: {
+				{ChannelID: 12, ModelName: "Plus", Ratio: 0.045},
+				{ChannelID: 12, ModelName: "codex福利分组", Ratio: 0.035},
+			},
+		}},
+	)
+	if resolved[5905] != 0.035 {
+		t.Fatalf("shared identity mapping = %#v, want account 5905 at 0.035", resolved)
+	}
+}
+
+func TestResolveAccountRateMappingsUsesGroupLabelWhenMonitorUnavailable(t *testing.T) {
+	account := poolAccountNamedForRateMap(5878, "https://ark.cn-beijing.volces.com", "deepseek")
+	account.Account.GroupIDs = []int64{94}
+	resolved := resolveAccountRateMappingsWithGroups(
+		context.Background(),
+		1,
+		[]sub2api.PoolAccount{account},
+		[]sub2api.AdminGroup{{
+			ID:   94,
+			Name: "国模大合集 自用 官方5折",
+		}},
+		staticAccountRateMappings{},
+		staticChannels{},
+		staticRateSnapshots{},
+	)
+	if resolved[5878] != 0.5 {
+		t.Fatalf("group-label fallback = %#v, want account 5878 at 0.5", resolved)
+	}
+}
+
 func TestResolveAccountRateMappingsUsesManualRateOnlyForSnapshotConflict(t *testing.T) {
 	resolved := resolveAccountRateMappings(
 		context.Background(),
@@ -300,6 +373,12 @@ func TestMergeUnavailableMatchesKeepsLastRateOnKeyMismatch(t *testing.T) {
 
 type staticAccountRateMappings struct {
 	items []AccountRateMapping
+}
+
+func poolAccountNamedForRateMap(id int64, baseURL, name string) sub2api.PoolAccount {
+	account := poolAccount(id, baseURL, "mapping-test-key", 10)
+	account.Account.Name = name
+	return account
 }
 
 func (s staticAccountRateMappings) ListAccountRateMappings(uint) ([]AccountRateMapping, error) {

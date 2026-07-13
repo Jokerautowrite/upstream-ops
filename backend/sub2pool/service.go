@@ -1425,10 +1425,11 @@ func (s *Service) snapshotWithCachedUpstreams(
 	}
 	mappedRates := map[int64]float64{}
 	if !cachedOnly {
-		mappedRates = resolveAccountRateMappings(
+		mappedRates = resolveAccountRateMappingsWithGroups(
 			ctx,
 			targetID,
 			accounts,
+			groups,
 			s.accountRateMappings,
 			mappingChannels,
 			s.rates,

@@ -12,9 +12,12 @@ UpstreamOps v0.0.6.
 - Matches upstream data by the full SHA-256 API-key fingerprint and normalized
   URL. An exact key match is the primary multiplier source.
 - Optionally imports an explicit legacy mapping of `Sub2 account ID + normalized
-  URL + UpstreamOps model name` for accounts without a usable key match. It
-  never derives a multiplier from an account name, never overrides an exact key
-  match, and never falls back after a key mismatch or ambiguous key match.
+  URL + UpstreamOps model name` for accounts without a usable key match. An
+  exact key match remains the primary source; display-only recovery then accepts
+  safe URL aliases, globally unique monitor-channel group labels, shared
+  channel identity words, and finally explicit account/group label hints when
+  the monitor channel is unavailable. These fallbacks never override an exact
+  key match and never participate in automatic priority changes.
 - Only `apikey` accounts with `credentials.pool_mode=true` participate in
   automatic priority writes.
 - Uses unique priorities in steps of `10`; lower upstream multipliers come
