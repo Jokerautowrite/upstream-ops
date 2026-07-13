@@ -116,6 +116,34 @@ func TestResolveAccountRateMappingsUsesDisabledSnapshotAsFallback(t *testing.T) 
 	}
 }
 
+func TestResolveAccountRateMappingsUsesAccountLabelAndObservedRate(t *testing.T) {
+	account := poolAccount(5906, "https://api.example.test", "unmatched-key", 10)
+	account.Account.Name = "Pro 008 阿拉丁"
+	resolved := resolveAccountRateMappings(
+		context.Background(),
+		1,
+		[]sub2api.PoolAccount{
+			account,
+		},
+		staticAccountRateMappings{},
+		staticChannels{items: []storage.Channel{{
+			ID:             54,
+			Name:           "Pro 008 阿拉丁 / Plus 006 阿拉丁",
+			SiteURL:        "https://api.example.test",
+			MonitorEnabled: true,
+		}}},
+		staticRateSnapshots{items: map[uint][]storage.RateSnapshot{
+			54: {
+				{ChannelID: 54, ModelName: "gpt pro", Ratio: 0.08},
+				{ChannelID: 54, ModelName: "生图", Ratio: 0.03},
+			},
+		}},
+	)
+	if resolved[5906] != 0.08 {
+		t.Fatalf("account label mapping = %#v, want account 5906 at 0.08", resolved)
+	}
+}
+
 func TestResolveAccountRateMappingsUsesManualRateOnlyForSnapshotConflict(t *testing.T) {
 	resolved := resolveAccountRateMappings(
 		context.Background(),

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +43,17 @@ type accountRateMapEntry struct {
 	Model   string   `json:"model"`
 	Rate    *float64 `json:"rate"`
 }
+
+type observedAccountRate struct {
+	channelName string
+	modelName   string
+	ratio       float64
+	active      bool
+}
+
+var accountLabelRatePattern = regexp.MustCompile(
+	`(?i)(pro|plus|cc|kiro|gemini|grok|g|图|生图)\s*([0-9]+(?:\s*\.\s*[0-9]+)?)`,
+)
 
 func (s *GormStateStore) ListAccountRateMappings(targetID uint) ([]AccountRateMapping, error) {
 	var rows []GormPoolAccountRateMapping
@@ -147,7 +159,7 @@ func resolveAccountRateMappings(
 		return out
 	}
 	mappings, err := store.ListAccountRateMappings(targetID)
-	if err != nil || len(mappings) == 0 {
+	if err != nil {
 		return out
 	}
 	accountURL := make(map[int64]string, len(accounts))
@@ -160,6 +172,7 @@ func resolveAccountRateMappings(
 	}
 	activeRatesByURL := make(map[string]map[string][]float64)
 	allRatesByURL := make(map[string]map[string][]float64)
+	observedRatesByURL := make(map[string][]observedAccountRate)
 	for _, channel := range monitorChannels {
 		normalized := normalizeURL(channel.SiteURL)
 		if normalized == "" {
@@ -177,6 +190,15 @@ func resolveAccountRateMappings(
 			if allRatesByURL[normalized] == nil {
 				allRatesByURL[normalized] = make(map[string][]float64)
 			}
+			observedRatesByURL[normalized] = append(
+				observedRatesByURL[normalized],
+				observedAccountRate{
+					channelName: channel.Name,
+					modelName:   modelName,
+					ratio:       snapshot.Ratio,
+					active:      channel.MonitorEnabled,
+				},
+			)
 			allRatesByURL[normalized][modelName] = append(
 				allRatesByURL[normalized][modelName],
 				snapshot.Ratio,
@@ -217,7 +239,161 @@ func resolveAccountRateMappings(
 			out[mapping.AccountID] = *mapping.ManualRate
 		}
 	}
+	for _, account := range accounts {
+		if _, exists := out[account.Account.ID]; exists {
+			continue
+		}
+		normalized := accountURL[account.Account.ID]
+		if rate, ok := resolveAccountLabelRate(account.Account.Name, observedRatesByURL[normalized]); ok {
+			out[account.Account.ID] = rate
+		}
+	}
 	return out
+}
+
+func resolveAccountLabelRate(accountName string, candidates []observedAccountRate) (float64, bool) {
+	if strings.TrimSpace(accountName) == "" || len(candidates) == 0 {
+		return 0, false
+	}
+	active := make([]observedAccountRate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.active {
+			active = append(active, candidate)
+		}
+	}
+	if len(active) > 0 {
+		candidates = active
+	}
+
+	accountLabel := normalizeLabel(accountName)
+	channelMatched := make([]observedAccountRate, 0, len(candidates))
+	for _, candidate := range candidates {
+		for _, part := range strings.Split(candidate.channelName, "/") {
+			if accountLabel != "" && accountLabel == normalizeLabel(part) {
+				channelMatched = append(channelMatched, candidate)
+				break
+			}
+		}
+	}
+	if len(channelMatched) > 0 {
+		candidates = channelMatched
+	}
+
+	if category := accountLabelCategory(accountName); category != "" {
+		categoryMatched := make([]observedAccountRate, 0, len(candidates))
+		for _, candidate := range candidates {
+			if modelMatchesAccountCategory(candidate.modelName, category) {
+				categoryMatched = append(categoryMatched, candidate)
+			}
+		}
+		if len(categoryMatched) > 0 {
+			candidates = categoryMatched
+		}
+	}
+
+	if hint, ok := accountLabelRateHint(accountName); ok {
+		rateMatched := make([]observedAccountRate, 0, len(candidates))
+		for _, candidate := range candidates {
+			if candidate.ratio == hint {
+				rateMatched = append(rateMatched, candidate)
+			}
+		}
+		if len(rateMatched) == 0 {
+			return 0, false
+		}
+		candidates = rateMatched
+	}
+
+	return uniqueObservedRate(candidates)
+}
+
+func normalizeLabel(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
+}
+
+func accountLabelCategory(value string) string {
+	label := normalizeLabel(value)
+	switch {
+	case strings.Contains(label, "图") || strings.Contains(label, "生图") || strings.Contains(label, "image"):
+		return "image"
+	case strings.Contains(label, "gemini"):
+		return "gemini"
+	case strings.Contains(label, "grok"):
+		return "grok"
+	case strings.Contains(label, "kiro"):
+		return "kiro"
+	case strings.Contains(label, "plus"):
+		return "plus"
+	case strings.Contains(label, "pro"):
+		return "pro"
+	case strings.Contains(label, "cc"):
+		return "cc"
+	case strings.Contains(label, "glm") || strings.Contains(label, "国模"):
+		return "cn"
+	case strings.HasPrefix(label, "g "):
+		return "gemini"
+	default:
+		return ""
+	}
+}
+
+func modelMatchesAccountCategory(model, category string) bool {
+	label := normalizeLabel(model)
+	switch category {
+	case "image":
+		return strings.Contains(label, "image") ||
+			strings.Contains(label, "生图") ||
+			strings.Contains(label, "绘画")
+	case "gemini":
+		return strings.Contains(label, "gemini")
+	case "grok":
+		return strings.Contains(label, "grok")
+	case "kiro":
+		return strings.Contains(label, "kiro")
+	case "plus":
+		return strings.Contains(label, "plus") || strings.Contains(label, "chatgpt")
+	case "pro":
+		return strings.Contains(label, "pro")
+	case "cc":
+		return strings.Contains(label, "cc") || strings.Contains(label, "claude")
+	case "cn":
+		return strings.Contains(label, "glm") ||
+			strings.Contains(label, "国产") ||
+			strings.Contains(label, "国模")
+	default:
+		return false
+	}
+}
+
+func accountLabelRateHint(value string) (float64, bool) {
+	match := accountLabelRatePattern.FindStringSubmatch(value)
+	if len(match) != 3 {
+		return 0, false
+	}
+	raw := strings.ReplaceAll(strings.TrimSpace(match[2]), " ", "")
+	if strings.Contains(raw, ".") {
+		rate, err := strconv.ParseFloat(raw, 64)
+		return rate, err == nil && rate >= 0 && rate <= 10
+	}
+	if strings.HasPrefix(raw, "0") && len(raw) > 1 {
+		value, err := strconv.Atoi(raw)
+		return float64(value) / 100, err == nil && value >= 0 && value <= 100
+	}
+	rate, err := strconv.ParseFloat(raw, 64)
+	return rate, err == nil && rate >= 0 && rate <= 10
+}
+
+func uniqueObservedRate(values []observedAccountRate) (float64, bool) {
+	if len(values) == 0 {
+		return 0, false
+	}
+	first := values[0].ratio
+	for _, value := range values[1:] {
+		if value.ratio != first {
+			return 0, false
+		}
+	}
+	return first, true
 }
 
 func normalizeModelName(value string) string {
