@@ -91,6 +91,31 @@ func TestResolveAccountRateMappingsUsesExactAccountURLAndModel(t *testing.T) {
 	}
 }
 
+func TestResolveAccountRateMappingsUsesDisabledSnapshotAsFallback(t *testing.T) {
+	rate := 0.25
+	resolved := resolveAccountRateMappings(
+		context.Background(),
+		1,
+		[]sub2api.PoolAccount{
+			poolAccount(11, "https://api.example.test/v1", "unmatched-key", 10),
+		},
+		staticAccountRateMappings{items: []AccountRateMapping{
+			{TargetID: 1, AccountID: 11, SiteURL: "https://api.example.test", ModelName: "Model One"},
+		}},
+		staticChannels{items: []storage.Channel{{
+			ID:             7,
+			SiteURL:        "https://api.example.test",
+			MonitorEnabled: false,
+		}}},
+		staticRateSnapshots{items: map[uint][]storage.RateSnapshot{
+			7: {{ChannelID: 7, ModelName: "model one", Ratio: rate}},
+		}},
+	)
+	if resolved[11] != rate {
+		t.Fatalf("disabled snapshot fallback = %#v, want account 11 at %v", resolved, rate)
+	}
+}
+
 func TestResolveAccountRateMappingsUsesManualRateOnlyForSnapshotConflict(t *testing.T) {
 	resolved := resolveAccountRateMappings(
 		context.Background(),
@@ -208,6 +233,40 @@ func TestMergeUnavailableMatchesKeepsLastDisplayValuesUntrusted(t *testing.T) {
 		got.rateSource != "upstream_api_key" ||
 		got.rateTrusted {
 		t.Fatalf("merged unavailable match = %#v", got)
+	}
+}
+
+func TestMergeUnavailableMatchesKeepsLastRateOnKeyMismatch(t *testing.T) {
+	raw := poolAccount(11, "https://api.example.test/v1", "exact-key", 10)
+	rate := 0.1
+	cached := &Snapshot{Accounts: []AccountSnapshot{{
+		ID:               11,
+		UpstreamURL:      "https://api.example.test",
+		UpstreamRate:     &rate,
+		MatchStatus:      "key_exact",
+		FingerprintState: "present",
+		IdentityDigest: identityDigest(
+			normalizeURL(raw.Identity().BaseURL),
+			raw.Identity().APIKeySHA256,
+		),
+		Availability: Availability{
+			RateAvailable: true,
+			RateTrusted:   true,
+		},
+	}}}
+	current := map[int64]upstreamMatch{
+		11: {
+			status:         "key_mismatch",
+			fingerprint:    "present",
+			identityDigest: identityDigest(normalizeURL(raw.Identity().BaseURL), raw.Identity().APIKeySHA256),
+		},
+	}
+
+	mergeUnavailableMatches([]sub2api.PoolAccount{raw}, current, cached)
+
+	got := current[11]
+	if got.rate == nil || *got.rate != rate || got.rateTrusted {
+		t.Fatalf("key mismatch cached rate = %#v, want untrusted %v", got, rate)
 	}
 }
 

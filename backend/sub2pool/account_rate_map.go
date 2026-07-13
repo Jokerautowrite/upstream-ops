@@ -158,11 +158,9 @@ func resolveAccountRateMappings(
 	if err != nil {
 		return out
 	}
-	ratesByURL := make(map[string]map[string][]float64)
+	activeRatesByURL := make(map[string]map[string][]float64)
+	allRatesByURL := make(map[string]map[string][]float64)
 	for _, channel := range monitorChannels {
-		if !channel.MonitorEnabled {
-			continue
-		}
 		normalized := normalizeURL(channel.SiteURL)
 		if normalized == "" {
 			continue
@@ -171,18 +169,27 @@ func resolveAccountRateMappings(
 		if err != nil {
 			continue
 		}
-		if ratesByURL[normalized] == nil {
-			ratesByURL[normalized] = make(map[string][]float64)
-		}
 		for _, snapshot := range snapshots {
 			modelName := normalizeModelName(snapshot.ModelName)
 			if modelName == "" {
 				continue
 			}
-			ratesByURL[normalized][modelName] = append(
-				ratesByURL[normalized][modelName],
+			if allRatesByURL[normalized] == nil {
+				allRatesByURL[normalized] = make(map[string][]float64)
+			}
+			allRatesByURL[normalized][modelName] = append(
+				allRatesByURL[normalized][modelName],
 				snapshot.Ratio,
 			)
+			if channel.MonitorEnabled {
+				if activeRatesByURL[normalized] == nil {
+					activeRatesByURL[normalized] = make(map[string][]float64)
+				}
+				activeRatesByURL[normalized][modelName] = append(
+					activeRatesByURL[normalized][modelName],
+					snapshot.Ratio,
+				)
+			}
 		}
 	}
 	for _, mapping := range mappings {
@@ -198,7 +205,13 @@ func resolveAccountRateMappings(
 			continue
 		}
 
-		if rate, unique := uniqueMappedRate(ratesByURL[normalized][modelName]); unique {
+		values := activeRatesByURL[normalized][modelName]
+		if len(values) == 0 {
+			// A disabled duplicate may still hold the last useful group
+			// snapshot. Prefer live channels, but keep this as a fallback.
+			values = allRatesByURL[normalized][modelName]
+		}
+		if rate, unique := uniqueMappedRate(values); unique {
 			out[mapping.AccountID] = rate
 		} else if mapping.ManualRate != nil {
 			out[mapping.AccountID] = *mapping.ManualRate

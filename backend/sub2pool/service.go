@@ -1645,7 +1645,7 @@ func mergeUnavailableMatches(
 	for _, account := range accounts {
 		accountID := account.Account.ID
 		match := current[accountID]
-		if match.status != "upstream_unavailable" {
+		if !canReuseCachedRate(match.status) {
 			continue
 		}
 		old, exists := previous[accountID]
@@ -1663,6 +1663,15 @@ func mergeUnavailableMatches(
 			match.balanceAt = cloneTime(old.balanceAt)
 		}
 		current[accountID] = match
+	}
+}
+
+func canReuseCachedRate(status string) bool {
+	switch status {
+	case "upstream_unavailable", "key_mismatch", "key_ambiguous", "fingerprint_missing", "url_missing":
+		return true
+	default:
+		return false
 	}
 }
 
