@@ -176,6 +176,41 @@ func TestSnapshotKeepsExactKeyRateAheadOfAccountMapping(t *testing.T) {
 	}
 }
 
+func TestMergeUnavailableMatchesKeepsLastDisplayValuesUntrusted(t *testing.T) {
+	raw := poolAccount(11, "https://api.example.test/v1", "exact-key", 10)
+	rate := 0.1
+	balance := 25.0
+	cached := &Snapshot{Accounts: []AccountSnapshot{{
+		ID:                 11,
+		UpstreamURL:        "https://api.example.test",
+		UpstreamRate:       &rate,
+		UpstreamRateSource: "upstream_api_key",
+		Balance:            &balance,
+		MatchStatus:        "key_exact",
+		FingerprintState:   "present",
+		IdentityDigest: identityDigest(
+			normalizeURL(raw.Identity().BaseURL),
+			raw.Identity().APIKeySHA256,
+		),
+		Availability: Availability{
+			Matched: true, RateAvailable: true, RateTrusted: true, BalanceAvailable: true,
+		},
+	}}}
+	current := map[int64]upstreamMatch{
+		11: {status: "upstream_unavailable", fingerprint: "present"},
+	}
+
+	mergeUnavailableMatches([]sub2api.PoolAccount{raw}, current, cached)
+
+	got := current[11]
+	if got.rate == nil || *got.rate != rate ||
+		got.balance == nil || *got.balance != balance ||
+		got.rateSource != "upstream_api_key" ||
+		got.rateTrusted {
+		t.Fatalf("merged unavailable match = %#v", got)
+	}
+}
+
 type staticAccountRateMappings struct {
 	items []AccountRateMapping
 }

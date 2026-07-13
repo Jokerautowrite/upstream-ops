@@ -146,7 +146,7 @@ func (s *Service) RefreshBaseSnapshotPreview(ctx context.Context, targetID uint)
 	if s.snapshots != nil {
 		cached, _, _ = s.snapshots.LoadSnapshot(targetID)
 	}
-	snapshot, err := s.snapshotWithCachedUpstreams(ctx, targetID, target, cached)
+	snapshot, err := s.snapshotWithCachedUpstreams(ctx, targetID, target, cached, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1157,7 +1157,11 @@ func equalInt64Sets(left, right []int64) bool {
 }
 
 func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.AdminTarget) (Snapshot, error) {
-	return s.snapshotWithCachedUpstreams(ctx, targetID, target, nil)
+	var previous *Snapshot
+	if s.snapshots != nil {
+		previous, _, _ = s.snapshots.LoadSnapshot(targetID)
+	}
+	return s.snapshotWithCachedUpstreams(ctx, targetID, target, previous, false)
 }
 
 func (s *Service) snapshotWithCachedUpstreams(
@@ -1165,6 +1169,7 @@ func (s *Service) snapshotWithCachedUpstreams(
 	targetID uint,
 	target sub2api.AdminTarget,
 	cached *Snapshot,
+	cachedOnly bool,
 ) (Snapshot, error) {
 	if s.admin == nil {
 		return Snapshot{}, ErrUnavailable
@@ -1216,11 +1221,12 @@ func (s *Service) snapshotWithCachedUpstreams(
 		snapshot.Groups = append(snapshot.Groups, item)
 	}
 
-	matches := cachedUpstreamMatches(accounts, cached)
+	matches := map[int64]upstreamMatch{}
 	matchErr := error(nil)
-	if cached == nil {
+	if !cachedOnly {
 		matches, matchErr = s.matcher.matchAccounts(ctx, accounts)
 	} else {
+		matches = cachedUpstreamMatches(accounts, cached)
 		s.refreshCachedBalances(accounts, matches)
 	}
 	if matchErr != nil {
@@ -1234,12 +1240,15 @@ func (s *Service) snapshotWithCachedUpstreams(
 			matches[account.Account.ID] = upstreamMatch{status: "upstream_unavailable", fingerprint: state}
 		}
 	}
+	if !cachedOnly {
+		mergeUnavailableMatches(accounts, matches, cached)
+	}
 	var mappingChannels ChannelStore
 	if s.matcher != nil {
 		mappingChannels = s.matcher.channels
 	}
 	mappedRates := map[int64]float64{}
-	if cached == nil {
+	if !cachedOnly {
 		mappedRates = resolveAccountRateMappings(
 			ctx,
 			targetID,
@@ -1445,6 +1454,36 @@ func cachedUpstreamMatches(accounts []sub2api.PoolAccount, cached *Snapshot) map
 		}
 	}
 	return out
+}
+
+func mergeUnavailableMatches(
+	accounts []sub2api.PoolAccount,
+	current map[int64]upstreamMatch,
+	cached *Snapshot,
+) {
+	previous := cachedUpstreamMatches(accounts, cached)
+	for _, account := range accounts {
+		accountID := account.Account.ID
+		match := current[accountID]
+		if match.status != "upstream_unavailable" {
+			continue
+		}
+		old, exists := previous[accountID]
+		if !exists {
+			continue
+		}
+		if match.rate == nil && old.rate != nil {
+			match.rate = cloneFloat(old.rate)
+			match.rateAt = cloneTime(old.rateAt)
+			match.rateSource = old.rateSource
+			match.rateTrusted = false
+		}
+		if match.balance == nil && old.balance != nil {
+			match.balance = cloneFloat(old.balance)
+			match.balanceAt = cloneTime(old.balanceAt)
+		}
+		current[accountID] = match
+	}
 }
 
 func (s *Service) refreshCachedBalances(
