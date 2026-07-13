@@ -26,6 +26,8 @@ type upstreamMatch struct {
 	identityDigest string
 	rateAt         *time.Time
 	balanceAt      *time.Time
+	rateSource     string
+	rateTrusted    bool
 }
 
 type upstreamCandidate struct {
@@ -264,6 +266,8 @@ func makeExactMatch(candidate upstreamCandidate, fingerprint string) upstreamMat
 		fingerprint: fingerprint,
 		rateAt:      cloneTime(candidate.rateAt),
 		balanceAt:   cloneTime(candidate.balanceAt),
+		rateSource:  "upstream_api_key",
+		rateTrusted: true,
 	}
 }
 

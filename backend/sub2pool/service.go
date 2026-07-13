@@ -1262,9 +1262,11 @@ func (s *Service) snapshotWithCachedUpstreams(
 		channel := classifyLowestGroups(lowest)
 		match := matches[account.ID]
 		if match.rate == nil {
-			if mappedRate, exists := mappedRates[account.ID]; exists && allowsAccountRateMapping(match) {
+			if mappedRate, exists := mappedRates[account.ID]; exists {
 				match.rate = &mappedRate
 				match.rateAt = timePtr(snapshot.GeneratedAt)
+				match.rateSource = "account_mapping"
+				match.rateTrusted = false
 				if match.status == "fingerprint_missing" {
 					match.matched = true
 					match.status = "account_mapping"
@@ -1297,7 +1299,7 @@ func (s *Service) snapshotWithCachedUpstreams(
 			Channel:            channel,
 			UpstreamURL:        normalizeURL(identity.BaseURL),
 			UpstreamRate:       cloneFloat(match.rate),
-			UpstreamRateSource: upstreamRateSource(match.status),
+			UpstreamRateSource: match.rateSource,
 			UpstreamRateAt:     cloneTime(match.rateAt),
 			Balance:            cloneFloat(match.balance),
 			BalanceAt:          cloneTime(match.balanceAt),
@@ -1311,7 +1313,7 @@ func (s *Service) snapshotWithCachedUpstreams(
 				BalanceAvailable: match.balance != nil,
 				TodayStatsReady:  raw.Stats.TodayRequests != nil || raw.Stats.TodayCost != nil,
 				RateAvailable:    match.rate != nil,
-				RateTrusted:      match.status == "key_exact",
+				RateTrusted:      match.rateTrusted,
 			},
 			Health: AccountHealth{
 				RateLimited:              raw.Health.RateLimited,
@@ -1361,10 +1363,6 @@ func (s *Service) snapshotWithCachedUpstreams(
 		Healthy:         snapshot.Summary.HealthyCount,
 	}
 	return snapshot, nil
-}
-
-func allowsAccountRateMapping(match upstreamMatch) bool {
-	return match.status != "key_mismatch" && match.status != "key_ambiguous"
 }
 
 func groupsForAccount(ids []int64, groups map[int64]GroupSnapshot) []GroupRef {
@@ -1442,6 +1440,8 @@ func cachedUpstreamMatches(accounts []sub2api.PoolAccount, cached *Snapshot) map
 			identityDigest: old.IdentityDigest,
 			rateAt:         cloneTime(old.UpstreamRateAt),
 			balanceAt:      cloneTime(old.BalanceAt),
+			rateSource:     old.UpstreamRateSource,
+			rateTrusted:    old.Availability.RateTrusted || old.MatchStatus == "key_exact",
 		}
 	}
 	return out
@@ -1478,17 +1478,6 @@ func (s *Service) refreshCachedBalances(
 		match.balance = cloneFloat(candidate.balance)
 		match.balanceAt = cloneTime(candidate.balanceAt)
 		matches[account.Account.ID] = match
-	}
-}
-
-func upstreamRateSource(status string) string {
-	switch status {
-	case "key_exact":
-		return "upstream_api_key"
-	case "account_mapping":
-		return "account_mapping"
-	default:
-		return ""
 	}
 }
 
