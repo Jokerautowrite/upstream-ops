@@ -232,8 +232,12 @@ export function useChannels() {
   return useApi<Channel[]>("/channels")
 }
 
-export function useChannelsPage(page = 1, pageSize = 9) {
-  return useApi<ChannelPage>(`/channels?page=${page}&page_size=${pageSize}`)
+export function useChannelsPage(page = 1, pageSize = 9, sort = "") {
+  const q = new URLSearchParams()
+  q.set("page", String(page))
+  q.set("page_size", String(pageSize))
+  if (sort) q.set("sort", sort)
+  return useApi<ChannelPage>(`/channels?${q.toString()}`)
 }
 
 export function useChannelRates(channelID: number | null) {

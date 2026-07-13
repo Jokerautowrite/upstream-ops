@@ -35,6 +35,39 @@ func openTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestChannelListPageSortsBeforePagination(t *testing.T) {
+	db := openTestDB(t)
+	channels := NewChannels(db)
+	balanceLow := 2.0
+	balanceHigh := 20.0
+	items := []Channel{
+		{Name: "Zulu", Type: ChannelTypeNewAPI, SiteURL: "https://z.example", Username: "u", PasswordCipher: "x", LastBalance: &balanceLow},
+		{Name: "alpha", Type: ChannelTypeNewAPI, SiteURL: "https://a.example", Username: "u", PasswordCipher: "x", LastBalance: &balanceHigh},
+		{Name: "Missing", Type: ChannelTypeNewAPI, SiteURL: "https://m.example", Username: "u", PasswordCipher: "x"},
+	}
+	for index := range items {
+		if err := channels.Create(&items[index]); err != nil {
+			t.Fatalf("create channel: %v", err)
+		}
+	}
+
+	page, total, err := channels.ListPage(1, 2, ChannelListSortNameAsc)
+	if err != nil {
+		t.Fatalf("sort name: %v", err)
+	}
+	if total != 3 || len(page) != 2 || page[0].Name != "alpha" || page[1].Name != "Missing" {
+		t.Fatalf("name page = %#v, total=%d", page, total)
+	}
+
+	page, _, err = channels.ListPage(1, 3, ChannelListSortBalanceDesc)
+	if err != nil {
+		t.Fatalf("sort balance: %v", err)
+	}
+	if page[0].Name != "alpha" || page[1].Name != "Zulu" || page[2].Name != "Missing" {
+		t.Fatalf("balance page = %#v", page)
+	}
+}
+
 func TestAggregateBalanceTrend(t *testing.T) {
 	db := openTestDB(t)
 	rates := NewRates(db)

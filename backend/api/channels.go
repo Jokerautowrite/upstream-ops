@@ -120,7 +120,12 @@ func listChannels(c *gin.Context, d *Deps) {
 			fail(c, http.StatusBadRequest, err)
 			return
 		}
-		list, total, err := d.Channels.ListPage(page, pageSize)
+		sortMode, err := parseChannelSort(c.Query("sort"))
+		if err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		list, total, err := d.Channels.ListPage(page, pageSize, sortMode)
 		if err != nil {
 			fail(c, http.StatusInternalServerError, err)
 			return
@@ -145,6 +150,20 @@ func listChannels(c *gin.Context, d *Deps) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": channelOutputs(d, list)})
+}
+
+func parseChannelSort(value string) (storage.ChannelListSort, error) {
+	sortMode := storage.ChannelListSort(strings.TrimSpace(value))
+	switch sortMode {
+	case storage.ChannelListSortDefault,
+		storage.ChannelListSortNameAsc,
+		storage.ChannelListSortNameDesc,
+		storage.ChannelListSortBalanceAsc,
+		storage.ChannelListSortBalanceDesc:
+		return sortMode, nil
+	default:
+		return "", fmt.Errorf("sort 只支持 name-asc、name-desc、balance-asc、balance-desc")
+	}
 }
 
 func createChannel(c *gin.Context, d *Deps) {

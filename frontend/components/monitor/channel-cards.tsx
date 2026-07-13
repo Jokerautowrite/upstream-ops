@@ -69,6 +69,7 @@ import {
 type Status = "healthy" | "low" | "failed" | "idle"
 type ChannelPageSize = 9 | 18 | 36 | 72 | 81 | "all"
 type GroupSortMode = "channel-asc" | "channel-desc" | "ratio-asc" | "ratio-desc"
+type ChannelSortMode = "" | "name-asc" | "name-desc" | "balance-asc" | "balance-desc"
 
 const channelPageSizeOptions: ChannelPageSize[] = [9, 18, 36, 72, 81, "all"]
 
@@ -520,7 +521,8 @@ export function ChannelCards() {
   const { data: channels, loading: channelsLoading } = useChannels()
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState<ChannelPageSize>(9)
-  const pageQuery = useChannelsPage(page, pageSize === "all" ? -1 : pageSize)
+  const [sortMode, setSortMode] = useState<ChannelSortMode>("")
+  const pageQuery = useChannelsPage(page, pageSize === "all" ? -1 : pageSize, sortMode)
   const refresh = useTriggerRefresh()
   const { confirm, dialog: confirmDialog } = useConfirm()
   const [editing, setEditing] = useState<Channel | null>(null)
@@ -738,6 +740,25 @@ export function ChannelCards() {
           <p className="text-xs text-muted-foreground">{"实时健康、余额与同步状态"}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <Select
+            value={sortMode || "default"}
+            onValueChange={(value) => {
+              setSortMode(value === "default" ? "" : value as ChannelSortMode)
+              setPage(1)
+            }}
+          >
+            <SelectTrigger className="h-8 w-40 text-xs">
+              <ArrowUpDown className="size-3.5 text-muted-foreground" />
+              <SelectValue placeholder="排序" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="default">默认顺序</SelectItem>
+              <SelectItem value="name-asc">名称 A-Z</SelectItem>
+              <SelectItem value="name-desc">名称 Z-A</SelectItem>
+              <SelectItem value="balance-asc">余额从低到高</SelectItem>
+              <SelectItem value="balance-desc">余额从高到低</SelectItem>
+            </SelectContent>
+          </Select>
           <span className="text-xs text-muted-foreground">
             {totalChannels}{" 个渠道"}
           </span>

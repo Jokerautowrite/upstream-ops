@@ -92,11 +92,6 @@ func (s *Scheduler) Start() error {
 			return err
 		}
 	}
-	if s.sub2Pool != nil {
-		if _, err := s.cron.AddFunc("0 */5 * * * *", s.runSub2PoolSnapshot); err != nil {
-			return err
-		}
-	}
 	s.cron.Start()
 	s.log.Info("scheduler started",
 		"balanceCron", s.cfg.BalanceCron,

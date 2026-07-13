@@ -334,14 +334,14 @@ func classifyChannel(lowestGroupName string) string {
 		return ChannelCC
 	case strings.Contains(name, "pro"):
 		return ChannelPro
+	case strings.Contains(name, "image"), strings.Contains(name, "图片"), strings.Contains(name, "生图"):
+		return ChannelImage
 	case strings.Contains(name, "plus"), strings.Contains(name, "gpt"):
 		return ChannelPLUS
 	case strings.Contains(name, "grok"):
 		return ChannelGrok
 	case strings.Contains(name, "gemini"), strings.Contains(" "+name+" ", " g "):
 		return ChannelGemini
-	case strings.Contains(name, "image"), strings.Contains(name, "图片"), strings.Contains(name, "生图"):
-		return ChannelImage
 	case strings.Contains(name, "cn"),
 		strings.Contains(name, "国模"),
 		strings.Contains(name, "glm"),

@@ -51,10 +51,12 @@ func (w *webhook) Send(ctx context.Context, msg Message) error {
 		SetContext(ctx).
 		SetHeader("Content-Type", "application/json").
 		SetBody(map[string]any{
-			"event":   msg.Event,
-			"subject": msg.Subject,
-			"body":    msg.Body,
-			"extra":   msg.Extra,
+			"event":       msg.Event,
+			"channel_id":  msg.ChannelID,
+			"model_name":  msg.ModelName,
+			"subject":     msg.Subject,
+			"body":        msg.Body,
+			"extra":       msg.Extra,
 		})
 	for k, v := range w.cfg.Headers {
 		req.SetHeader(k, v)

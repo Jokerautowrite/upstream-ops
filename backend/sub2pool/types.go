@@ -19,7 +19,7 @@ const (
 	ChannelPLUS   = "PLUS"
 	ChannelGrok   = "Grok"
 	ChannelGemini = "Gemini"
-	ChannelImage  = "Image"
+	ChannelImage  = "生图"
 	ChannelCN     = "CN"
 	ChannelOther  = "Other"
 )

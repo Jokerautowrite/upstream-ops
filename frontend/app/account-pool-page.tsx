@@ -138,6 +138,7 @@ export default function AccountPoolPage() {
   const [applying, setApplying] = useState(false)
   const [applyConflict, setApplyConflict] = useState<string | null>(null)
   const [automationUpdating, setAutomationUpdating] = useState(false)
+  const [snapshotRefreshing, setSnapshotRefreshing] = useState(false)
 
   function setTargetID(nextTargetID: string) {
     retainedTargetID = nextTargetID
@@ -281,12 +282,25 @@ export default function AccountPoolPage() {
     }
   }, [currentSnapshot?.snapshot_signature, preview])
 
-  function handleRefresh() {
+  async function handleRefresh() {
+    if (!targetID) return
     setPreview(null)
     setApplyOpen(false)
     setApplyConflict(null)
-    snapshot.refetch()
-    automation.refetch()
+    setSnapshotRefreshing(true)
+    try {
+      const data = await apiFetch<NonNullable<typeof snapshot.data>>(
+        `/sub2-pool/targets/${encodeURIComponent(targetID)}/snapshot/refresh-base`,
+        { method: "POST" },
+      )
+      snapshot.setData(data)
+      automation.refetch()
+      toast.success("账号池已刷新")
+    } catch (err) {
+      toast.error(errorMessage(err, "刷新账号池失败"))
+    } finally {
+      setSnapshotRefreshing(false)
+    }
   }
 
   async function handleToggleSchedulable(account: Sub2PoolAccount, next: boolean) {
@@ -496,7 +510,7 @@ export default function AccountPoolPage() {
         selectedTargetID={targetID}
         summary={summary}
         refreshedAt={currentSnapshot?.refreshed_at}
-        loading={snapshot.loading || targetChanging}
+        loading={snapshot.loading || snapshotRefreshing || targetChanging}
         onTargetChange={setTargetID}
         onRefresh={handleRefresh}
       />
@@ -545,8 +559,8 @@ export default function AccountPoolPage() {
             <EmptyTitle>账号数据尚未加载</EmptyTitle>
             <EmptyDescription>切换到账号池不会自动请求数据。需要查看时点击刷新即可。</EmptyDescription>
           </EmptyHeader>
-          <Button type="button" variant="outline" onClick={handleRefresh} disabled={snapshot.loading || !targetID}>
-            <RefreshCw className={snapshot.loading ? "size-3.5 animate-spin" : "size-3.5"} />
+          <Button type="button" variant="outline" onClick={() => void handleRefresh()} disabled={snapshotRefreshing || !targetID}>
+            <RefreshCw className={snapshotRefreshing ? "size-3.5 animate-spin" : "size-3.5"} />
             刷新账号池
           </Button>
         </Empty>

@@ -1245,6 +1245,17 @@ func TestSnapshotMergesEqualLowestGroupsBeforeClassification(t *testing.T) {
 	}
 }
 
+func TestClassifyImageGroupsBeforeGPTPlus(t *testing.T) {
+	for _, name := range []string{"GPT Image", "生图 PLUS", "gpt image 1"} {
+		if got := classifyChannel(name); got != ChannelImage {
+			t.Fatalf("classifyChannel(%q) = %q, want %q", name, got, ChannelImage)
+		}
+	}
+	if got := classifyChannel("GPT PLUS"); got != ChannelPLUS {
+		t.Fatalf("classifyChannel(GPT PLUS) = %q, want %q", got, ChannelPLUS)
+	}
+}
+
 func TestSnapshotUsesSafeAccountTodayStatsAndHealthFlags(t *testing.T) {
 	service, admin := newTestService(t, []sub2api.PoolAccount{
 		poolAccount(1, "https://api.example.test/v1", "key-1", 10),

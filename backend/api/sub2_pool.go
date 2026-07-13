@@ -28,6 +28,7 @@ type Sub2PoolService interface {
 type sub2PoolSnapshotCache interface {
 	CachedSnapshotPreview(ctx context.Context, targetID uint) (*sub2pool.Snapshot, *sub2pool.PriorityPreview, error)
 	RefreshSnapshotPreview(ctx context.Context, targetID uint) (*sub2pool.Snapshot, *sub2pool.PriorityPreview, error)
+	RefreshBaseSnapshotPreview(ctx context.Context, targetID uint) (*sub2pool.Snapshot, *sub2pool.PriorityPreview, error)
 }
 
 type sub2PoolTargetLister interface {
@@ -45,6 +46,7 @@ func RegisterSub2Pool(g *gin.RouterGroup, service Sub2PoolService, targets sub2P
 	group.GET("/targets", func(c *gin.Context) { listSub2PoolTargets(c, targets) })
 	group.GET("/targets/:id/snapshot", func(c *gin.Context) { getSub2PoolSnapshot(c, service, targets) })
 	group.POST("/targets/:id/snapshot/refresh", func(c *gin.Context) { refreshSub2PoolSnapshot(c, service, targets) })
+	group.POST("/targets/:id/snapshot/refresh-base", func(c *gin.Context) { refreshBaseSub2PoolSnapshot(c, service, targets) })
 	group.POST("/targets/:id/preview", func(c *gin.Context) { previewSub2PoolPriorities(c, service) })
 	group.POST("/targets/:id/apply", func(c *gin.Context) { applySub2PoolPriorities(c, service) })
 	group.PATCH("/accounts/:id/schedulable", func(c *gin.Context) { setSub2PoolSchedulable(c, service) })
@@ -160,6 +162,25 @@ func refreshSub2PoolSnapshot(c *gin.Context, service Sub2PoolService, targets su
 		return
 	}
 	snapshot, preview, err := readSub2PoolSnapshot(c.Request.Context(), service, targetID, true)
+	if err != nil {
+		failSub2Pool(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": snapshotDTO(snapshot, preview, targetName(targets, targetID))})
+}
+
+func refreshBaseSub2PoolSnapshot(c *gin.Context, service Sub2PoolService, targets sub2PoolTargetLister) {
+	targetID, err := uintParam(c, "id")
+	if err != nil {
+		failSub2Pool(c, sub2pool.ErrInvalidInput)
+		return
+	}
+	cache, ok := service.(sub2PoolSnapshotCache)
+	if !ok {
+		failSub2Pool(c, sub2pool.ErrUnavailable)
+		return
+	}
+	snapshot, preview, err := cache.RefreshBaseSnapshotPreview(c.Request.Context(), targetID)
 	if err != nil {
 		failSub2Pool(c, err)
 		return

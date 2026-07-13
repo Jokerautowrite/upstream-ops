@@ -10,6 +10,16 @@ import (
 // Channels 渠道仓库。
 type Channels struct{ db *gorm.DB }
 
+type ChannelListSort string
+
+const (
+	ChannelListSortDefault     ChannelListSort = ""
+	ChannelListSortNameAsc     ChannelListSort = "name-asc"
+	ChannelListSortNameDesc    ChannelListSort = "name-desc"
+	ChannelListSortBalanceAsc  ChannelListSort = "balance-asc"
+	ChannelListSortBalanceDesc ChannelListSort = "balance-desc"
+)
+
 func NewChannels(db *gorm.DB) *Channels { return &Channels{db: db} }
 
 func (r *Channels) Create(c *Channel) error { return r.db.Create(c).Error }
@@ -63,7 +73,7 @@ func (r *Channels) List() ([]Channel, error) {
 	}
 	return list, nil
 }
-func (r *Channels) ListPage(page, pageSize int) ([]Channel, int64, error) {
+func (r *Channels) ListPage(page, pageSize int, sortMode ChannelListSort) ([]Channel, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -75,7 +85,19 @@ func (r *Channels) ListPage(page, pageSize int) ([]Channel, int64, error) {
 		return nil, 0, err
 	}
 	var list []Channel
-	q := r.db.Order("sort_order DESC").Order("id ASC")
+	q := r.db
+	switch sortMode {
+	case ChannelListSortNameAsc:
+		q = q.Order("name COLLATE NOCASE ASC").Order("id ASC")
+	case ChannelListSortNameDesc:
+		q = q.Order("name COLLATE NOCASE DESC").Order("id ASC")
+	case ChannelListSortBalanceAsc:
+		q = q.Order("last_balance IS NULL ASC").Order("last_balance ASC").Order("id ASC")
+	case ChannelListSortBalanceDesc:
+		q = q.Order("last_balance IS NULL ASC").Order("last_balance DESC").Order("id ASC")
+	default:
+		q = q.Order("sort_order DESC").Order("id ASC")
+	}
 	if pageSize != -1 {
 		q = q.Offset((page - 1) * pageSize).Limit(pageSize)
 	}
