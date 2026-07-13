@@ -8,6 +8,7 @@ import { AccountPoolAutomationCard } from "@/components/account-pool/account-poo
 import {
   AccountPoolFilters,
   type AccountPoolFilterState,
+  type AccountPoolSort,
 } from "@/components/account-pool/account-pool-filters"
 import {
   AccountPoolDesktopTable,
@@ -245,7 +246,16 @@ export default function AccountPoolPage() {
             compared = nullableNumberCompare(left.account.balance, right.account.balance, "desc")
             break
           case "name-asc":
-            compared = left.account.name.localeCompare(right.account.name, "zh-CN")
+            compared = left.account.name.localeCompare(right.account.name, "en", { sensitivity: "base" })
+            break
+          case "name-desc":
+            compared = right.account.name.localeCompare(left.account.name, "en", { sensitivity: "base" })
+            break
+          case "group-rate-asc":
+            compared = nullableNumberCompare(left.account.min_group_multiplier, right.account.min_group_multiplier, "asc")
+            break
+          case "group-rate-desc":
+            compared = nullableNumberCompare(left.account.min_group_multiplier, right.account.min_group_multiplier, "desc")
             break
           default:
             break
@@ -254,6 +264,10 @@ export default function AccountPoolPage() {
       })
       .map(({ account }) => account)
   }, [accounts, filters])
+
+  function handleSortChange(sort: AccountPoolSort) {
+    setFilters({ ...filters, sort })
+  }
 
   useEffect(() => {
     if (
@@ -564,6 +578,8 @@ export default function AccountPoolPage() {
           <AccountPoolDesktopTable
             accounts={filteredAccounts}
             busyAccountID={busyAccountID}
+            sort={filters.sort}
+            onSortChange={handleSortChange}
             onToggleSchedulable={handleToggleSchedulable}
           />
           <AccountPoolMobileCards

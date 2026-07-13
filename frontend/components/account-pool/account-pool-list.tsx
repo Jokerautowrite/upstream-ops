@@ -1,7 +1,20 @@
-import { AlertTriangle, CheckCircle2, ExternalLink, PauseCircle, ShieldAlert, ShieldCheck, TimerReset } from "lucide-react"
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  CheckCircle2,
+  ExternalLink,
+  PauseCircle,
+  PlayCircle,
+  ShieldAlert,
+  ShieldCheck,
+  TimerReset,
+} from "lucide-react"
+import type { AccountPoolSort } from "./account-pool-filters"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { Switch } from "@/components/ui/switch"
 import {
   Table,
   TableBody,
@@ -10,6 +23,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import type { Sub2PoolAccount } from "@/lib/api-types"
 import { decimal, formatRatio } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -32,6 +50,21 @@ interface AccountPoolListProps {
   accounts: Sub2PoolAccount[]
   busyAccountID: number | null
   onToggleSchedulable: (account: Sub2PoolAccount, next: boolean) => void
+}
+
+interface AccountPoolDesktopTableProps extends AccountPoolListProps {
+  sort: AccountPoolSort
+  onSortChange: (sort: AccountPoolSort) => void
+}
+
+type SortField = "name" | "balance" | "multiplier" | "group-rate" | "priority"
+
+const sortValues: Record<SortField, { asc: AccountPoolSort; desc: AccountPoolSort }> = {
+  name: { asc: "name-asc", desc: "name-desc" },
+  balance: { asc: "balance-asc", desc: "balance-desc" },
+  multiplier: { asc: "multiplier-asc", desc: "multiplier-desc" },
+  "group-rate": { asc: "group-rate-asc", desc: "group-rate-desc" },
+  priority: { asc: "priority-asc", desc: "priority-desc" },
 }
 
 function toneClass(tone: string) {
@@ -90,6 +123,111 @@ function AccountHealthIcons({ account }: { account: Sub2PoolAccount }) {
   )
 }
 
+function priorityLabel(account: Sub2PoolAccount) {
+  const current = formatNumeric(account.current_priority)
+  if (
+    account.suggested_priority == null ||
+    account.current_priority === account.suggested_priority
+  ) {
+    return `${current}（不变）`
+  }
+  return `${current}（→ ${formatNumeric(account.suggested_priority)}）`
+}
+
+function AccountActions({
+  account,
+  busy,
+  onToggleSchedulable,
+}: {
+  account: Sub2PoolAccount
+  busy: boolean
+  onToggleSchedulable: (account: Sub2PoolAccount, next: boolean) => void
+}) {
+  const schedulable = isSchedulable(account)
+
+  return (
+    <div className="flex items-center justify-end gap-1">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            asChild={Boolean(account.upstream_url)}
+            disabled={!account.upstream_url}
+            aria-label={`打开 ${account.name} 上游网页`}
+          >
+            {account.upstream_url ? (
+              <a href={account.upstream_url} target="_blank" rel="noreferrer">
+                <ExternalLink className="size-3.5" />
+              </a>
+            ) : (
+              <ExternalLink className="size-3.5" />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>打开上游网页</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            disabled={busy}
+            onClick={() => onToggleSchedulable(account, !schedulable)}
+            aria-label={`${schedulable ? "暂停" : "恢复"} ${account.name} 调度`}
+          >
+            {schedulable ? (
+              <PauseCircle className="size-3.5" />
+            ) : (
+              <PlayCircle className="size-3.5" />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{schedulable ? "暂停调度" : "恢复调度"}</TooltipContent>
+      </Tooltip>
+    </div>
+  )
+}
+
+function SortableHead({
+  field,
+  label,
+  sort,
+  onSortChange,
+  className,
+}: {
+  field: SortField
+  label: React.ReactNode
+  sort: AccountPoolSort
+  onSortChange: (sort: AccountPoolSort) => void
+  className?: string
+}) {
+  const values = sortValues[field]
+  const direction = sort === values.asc ? "asc" : sort === values.desc ? "desc" : null
+  const nextSort = direction === "asc" ? values.desc : values.asc
+
+  return (
+    <TableHead className={className} aria-sort={direction === "asc" ? "ascending" : direction === "desc" ? "descending" : "none"}>
+      <button
+        type="button"
+        className="inline-flex min-h-8 items-center gap-1 text-left font-medium hover:text-foreground"
+        onClick={() => onSortChange(nextSort)}
+      >
+        <span>{label}</span>
+        {direction === "asc" ? (
+          <ArrowUp className="size-3.5" />
+        ) : direction === "desc" ? (
+          <ArrowDown className="size-3.5" />
+        ) : (
+          <ArrowUpDown className="size-3.5 text-muted-foreground" />
+        )}
+      </button>
+    </TableHead>
+  )
+}
+
 function AccountCore({
   account,
   busy,
@@ -121,28 +259,18 @@ function AccountCore({
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] text-muted-foreground">调度</span>
-          <Switch
-            checked={isSchedulable(account)}
-            onCheckedChange={(next) => onToggleSchedulable(account, next)}
-            disabled={busy}
-            aria-label={`${isSchedulable(account) ? "暂停" : "恢复"} ${account.name} 调度`}
-          />
-        </div>
+        <AccountActions
+          account={account}
+          busy={busy}
+          onToggleSchedulable={onToggleSchedulable}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="rounded-md border border-border bg-muted/20 px-2 py-1.5">
-          <div className="text-[10px] text-muted-foreground">当前优先级</div>
+          <div className="text-[10px] text-muted-foreground">优先级</div>
           <div className="mt-0.5 font-semibold tabular-nums">
-            {formatNumeric(account.current_priority)}
-          </div>
-        </div>
-        <div className="rounded-md border border-border bg-muted/20 px-2 py-1.5">
-          <div className="text-[10px] text-muted-foreground">建议优先级</div>
-          <div className="mt-0.5 font-semibold tabular-nums">
-            {formatNumeric(account.suggested_priority)}
+            {priorityLabel(account)}
           </div>
         </div>
         <div className="rounded-md border border-border bg-muted/20 px-2 py-1.5">
@@ -214,23 +342,31 @@ function AccountCore({
 export function AccountPoolDesktopTable({
   accounts,
   busyAccountID,
+  sort,
+  onSortChange,
   onToggleSchedulable,
-}: AccountPoolListProps) {
+}: AccountPoolDesktopTableProps) {
   return (
     <div className="hidden overflow-x-auto rounded-lg border border-border bg-card shadow-sm lg:block">
       <Table className="min-w-[1480px]">
         <TableHeader>
           <TableRow>
-            <TableHead className="w-52">账号</TableHead>
-            <TableHead className="w-24">余额</TableHead>
-            <TableHead className="w-32">上游倍率</TableHead>
-            <TableHead className="w-32">Sub2 最低组</TableHead>
+            <SortableHead field="name" label="账号" sort={sort} onSortChange={onSortChange} className="w-52" />
+            <SortableHead field="balance" label="余额" sort={sort} onSortChange={onSortChange} className="w-24" />
+            <SortableHead field="multiplier" label="上游倍率" sort={sort} onSortChange={onSortChange} className="w-32" />
+            <SortableHead
+              field="group-rate"
+              label={<><span className="block">Sub2</span><span className="block">最低组</span></>}
+              sort={sort}
+              onSortChange={onSortChange}
+              className="w-24 whitespace-normal leading-tight"
+            />
             <TableHead className="w-56">完整分组</TableHead>
             <TableHead className="w-44">上游地址</TableHead>
             <TableHead className="w-36">异常 / 限流</TableHead>
             <TableHead className="w-28">请求 / 并发</TableHead>
-            <TableHead className="w-32">优先级</TableHead>
-            <TableHead className="w-20 text-right">调度</TableHead>
+            <SortableHead field="priority" label="优先级" sort={sort} onSortChange={onSortChange} className="w-36" />
+            <TableHead className="w-24 text-right">操作</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -256,8 +392,8 @@ export function AccountPoolDesktopTable({
                   </div>
                   <div className="text-muted-foreground">{accountMultiplierSourceLabel(account)}</div>
                 </TableCell>
-                <TableCell className="text-[11px]">
-                  <div className="truncate">{account.min_group || "—"}</div>
+                <TableCell className="w-24 max-w-24 whitespace-normal break-words text-[11px]">
+                  <div className="whitespace-normal break-words">{account.min_group || "—"}</div>
                   <div className="font-mono text-muted-foreground">
                     {account.min_group_multiplier == null ? "—" : formatRatio(account.min_group_multiplier)}
                   </div>
@@ -313,15 +449,14 @@ export function AccountPoolDesktopTable({
                   </div>
                 </TableCell>
                 <TableCell className="font-mono text-[11px] tabular-nums">
-                  <div>{formatNumeric(account.current_priority)} → {formatNumeric(account.suggested_priority)}</div>
+                  <div>{priorityLabel(account)}</div>
                   <div className="font-sans text-[10px] text-muted-foreground">{accountBusinessChannel(account)}</div>
                 </TableCell>
                 <TableCell className="text-right">
-                  <Switch
-                    checked={isSchedulable(account)}
-                    onCheckedChange={(next) => onToggleSchedulable(account, next)}
-                    disabled={busyAccountID === account.id}
-                    aria-label={`${isSchedulable(account) ? "暂停" : "恢复"} ${account.name} 调度`}
+                  <AccountActions
+                    account={account}
+                    busy={busyAccountID === account.id}
+                    onToggleSchedulable={onToggleSchedulable}
                   />
                 </TableCell>
               </TableRow>

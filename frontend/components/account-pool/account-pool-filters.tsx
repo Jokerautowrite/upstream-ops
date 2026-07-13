@@ -28,6 +28,9 @@ export type AccountPoolSort =
   | "balance-asc"
   | "balance-desc"
   | "name-asc"
+  | "name-desc"
+  | "group-rate-asc"
+  | "group-rate-desc"
 
 export interface AccountPoolFilterState {
   query: string
@@ -80,6 +83,9 @@ const sortOptions: Array<{ value: AccountPoolSort; label: string }> = [
   { value: "balance-asc", label: "余额从低到高" },
   { value: "balance-desc", label: "余额从高到低" },
   { value: "name-asc", label: "名称 A-Z" },
+  { value: "name-desc", label: "名称 Z-A" },
+  { value: "group-rate-asc", label: "Sub2 最低组倍率从低到高" },
+  { value: "group-rate-desc", label: "Sub2 最低组倍率从高到低" },
 ]
 
 export function AccountPoolFilters({
