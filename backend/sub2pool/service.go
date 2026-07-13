@@ -23,6 +23,7 @@ type Service struct {
 	state               StateStore
 	auto                AutomationStore
 	leases              LeaseStore
+	snapshots           SnapshotStore
 	cfg                 Config
 	leaseOwner          string
 
@@ -52,6 +53,9 @@ func New(
 	}
 	if leases, ok := state.(LeaseStore); ok {
 		service.leases = leases
+	}
+	if snapshots, ok := state.(SnapshotStore); ok {
+		service.snapshots = snapshots
 	}
 	service.leaseOwner = fmt.Sprintf("upstream-ops-%d-%p", time.Now().UnixNano(), service)
 	return service
@@ -101,7 +105,66 @@ func (s *Service) SnapshotPreview(ctx context.Context, targetID uint) (*Snapshot
 	if err != nil {
 		return nil, nil, err
 	}
+	s.saveSnapshot(snapshot, preview)
 	return &snapshot, &preview, nil
+}
+
+func (s *Service) CachedSnapshotPreview(ctx context.Context, targetID uint) (*Snapshot, *PriorityPreview, error) {
+	if _, err := s.targetAccess(targetID); err != nil {
+		return nil, nil, err
+	}
+	if s.snapshots != nil {
+		snapshot, preview, err := s.snapshots.LoadSnapshot(targetID)
+		if err == nil && snapshot != nil && preview != nil {
+			return snapshot, preview, nil
+		}
+	}
+	return s.RefreshSnapshotPreview(ctx, targetID)
+}
+
+func (s *Service) RefreshSnapshotPreview(ctx context.Context, targetID uint) (*Snapshot, *PriorityPreview, error) {
+	target, err := s.targetAccess(targetID)
+	if err != nil {
+		return nil, nil, err
+	}
+	snapshot, preview, err := s.snapshotPreview(ctx, targetID, target)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !s.saveSnapshot(snapshot, preview) {
+		return nil, nil, ErrUnavailable
+	}
+	return &snapshot, &preview, nil
+}
+
+func (s *Service) RefreshBaseSnapshotPreview(ctx context.Context, targetID uint) (*Snapshot, *PriorityPreview, error) {
+	target, err := s.targetAccess(targetID)
+	if err != nil {
+		return nil, nil, err
+	}
+	var cached *Snapshot
+	if s.snapshots != nil {
+		cached, _, _ = s.snapshots.LoadSnapshot(targetID)
+	}
+	snapshot, err := s.snapshotWithCachedUpstreams(ctx, targetID, target, cached)
+	if err != nil {
+		return nil, nil, err
+	}
+	previous, err := s.loadState(targetID)
+	if err != nil {
+		return nil, nil, err
+	}
+	preview := buildPriorityPreview(snapshot)
+	preview.Guards = validateGuards(snapshot, preview, previous, s.cfg)
+	addPriorityTransitionGuard(snapshot, &preview)
+	if !s.saveSnapshot(snapshot, preview) {
+		return nil, nil, ErrUnavailable
+	}
+	return &snapshot, &preview, nil
+}
+
+func (s *Service) saveSnapshot(snapshot Snapshot, preview PriorityPreview) bool {
+	return s.snapshots != nil && s.snapshots.SaveSnapshot(snapshot, preview) == nil
 }
 
 func (s *Service) snapshotPreview(ctx context.Context, targetID uint, target sub2api.AdminTarget) (Snapshot, PriorityPreview, error) {
@@ -116,6 +179,7 @@ func (s *Service) snapshotPreview(ctx context.Context, targetID uint, target sub
 	preview := buildPriorityPreview(snapshot)
 	preview.Guards = validateGuards(snapshot, preview, previous, s.cfg)
 	addPriorityTransitionGuard(snapshot, &preview)
+	s.saveSnapshot(snapshot, preview)
 	return snapshot, preview, nil
 }
 
@@ -280,6 +344,7 @@ func (s *Service) Run(ctx context.Context, targetID uint) (*RunResult, error) {
 	preview := buildPriorityPreview(snapshot)
 	preview.Guards = validateGuards(snapshot, preview, previous, s.cfg)
 	addPriorityTransitionGuard(snapshot, &preview)
+	s.saveSnapshot(snapshot, preview)
 	result := &RunResult{Preview: preview, NotificationStatus: "skipped"}
 	event := composeEvent(snapshot, preview, previous, nil, s.cfg)
 	result.RateChangeCount = len(event.RateChanges)
@@ -1092,6 +1157,15 @@ func equalInt64Sets(left, right []int64) bool {
 }
 
 func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.AdminTarget) (Snapshot, error) {
+	return s.snapshotWithCachedUpstreams(ctx, targetID, target, nil)
+}
+
+func (s *Service) snapshotWithCachedUpstreams(
+	ctx context.Context,
+	targetID uint,
+	target sub2api.AdminTarget,
+	cached *Snapshot,
+) (Snapshot, error) {
 	if s.admin == nil {
 		return Snapshot{}, ErrUnavailable
 	}
@@ -1142,7 +1216,13 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 		snapshot.Groups = append(snapshot.Groups, item)
 	}
 
-	matches, matchErr := s.matcher.matchAccounts(ctx, accounts)
+	matches := cachedUpstreamMatches(accounts, cached)
+	matchErr := error(nil)
+	if cached == nil {
+		matches, matchErr = s.matcher.matchAccounts(ctx, accounts)
+	} else {
+		s.refreshCachedBalances(accounts, matches)
+	}
 	if matchErr != nil {
 		matches = make(map[int64]upstreamMatch, len(accounts))
 		for _, account := range accounts {
@@ -1158,14 +1238,17 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 	if s.matcher != nil {
 		mappingChannels = s.matcher.channels
 	}
-	mappedRates := resolveAccountRateMappings(
-		ctx,
-		targetID,
-		accounts,
-		s.accountRateMappings,
-		mappingChannels,
-		s.rates,
-	)
+	mappedRates := map[int64]float64{}
+	if cached == nil {
+		mappedRates = resolveAccountRateMappings(
+			ctx,
+			targetID,
+			accounts,
+			s.accountRateMappings,
+			mappingChannels,
+			s.rates,
+		)
+	}
 	for _, raw := range accounts {
 		account := raw.Account
 		if stats, exists := todayStats[account.ID]; exists {
@@ -1174,12 +1257,14 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 			raw.Stats.TodayRequests = &requests
 			raw.Stats.TodayCost = &cost
 		}
-		lowest := lowestGroups(account.GroupIDs, groupByID)
+		accountGroups := groupsForAccount(account.GroupIDs, groupByID)
+		lowest := lowestGroupsFromRefs(accountGroups)
 		channel := classifyLowestGroups(lowest)
 		match := matches[account.ID]
 		if match.rate == nil {
 			if mappedRate, exists := mappedRates[account.ID]; exists && allowsAccountRateMapping(match) {
 				match.rate = &mappedRate
+				match.rateAt = timePtr(snapshot.GeneratedAt)
 				if match.status == "fingerprint_missing" {
 					match.matched = true
 					match.status = "account_mapping"
@@ -1207,10 +1292,15 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 			CurrentConcurrency: raw.Health.CurrentConcurrency,
 			MaxConcurrency:     account.Concurrency,
 			GroupIDs:           append([]int64(nil), account.GroupIDs...),
+			Groups:             accountGroups,
 			LowestGroups:       lowest,
 			Channel:            channel,
+			UpstreamURL:        normalizeURL(identity.BaseURL),
 			UpstreamRate:       cloneFloat(match.rate),
+			UpstreamRateSource: upstreamRateSource(match.status),
+			UpstreamRateAt:     cloneTime(match.rateAt),
 			Balance:            cloneFloat(match.balance),
+			BalanceAt:          cloneTime(match.balanceAt),
 			TodayStats: TodayStats{
 				Requests:  cloneInt(raw.Stats.TodayRequests),
 				Cost:      cloneFloat(raw.Stats.TodayCost),
@@ -1221,6 +1311,7 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 				BalanceAvailable: match.balance != nil,
 				TodayStatsReady:  raw.Stats.TodayRequests != nil || raw.Stats.TodayCost != nil,
 				RateAvailable:    match.rate != nil,
+				RateTrusted:      match.status == "key_exact",
 			},
 			Health: AccountHealth{
 				RateLimited:              raw.Health.RateLimited,
@@ -1234,7 +1325,7 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 		item.Availability.Healthy = item.Schedulable &&
 			item.Availability.Matched &&
 			item.Availability.BalanceAvailable &&
-			item.Availability.RateAvailable &&
+			trustedRateAvailable(item) &&
 			!item.Health.RateLimited &&
 			!item.Health.TemporarilyUnschedulable &&
 			!item.Health.Overloaded &&
@@ -1276,14 +1367,31 @@ func allowsAccountRateMapping(match upstreamMatch) bool {
 	return match.status != "key_mismatch" && match.status != "key_ambiguous"
 }
 
-func lowestGroups(ids []int64, groups map[int64]GroupSnapshot) []GroupRef {
-	var ratio *float64
+func groupsForAccount(ids []int64, groups map[int64]GroupSnapshot) []GroupRef {
 	out := make([]GroupRef, 0, len(ids))
 	for _, id := range ids {
 		group, exists := groups[id]
-		if !exists {
-			continue
+		if exists {
+			out = append(out, GroupRef{ID: group.ID, Name: group.Name, Ratio: group.Ratio})
 		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Ratio != out[j].Ratio {
+			return out[i].Ratio < out[j].Ratio
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+func lowestGroups(ids []int64, groups map[int64]GroupSnapshot) []GroupRef {
+	return lowestGroupsFromRefs(groupsForAccount(ids, groups))
+}
+
+func lowestGroupsFromRefs(groups []GroupRef) []GroupRef {
+	var ratio *float64
+	out := make([]GroupRef, 0, len(groups))
+	for _, group := range groups {
 		if ratio == nil || group.Ratio < *ratio {
 			value := group.Ratio
 			ratio = &value
@@ -1295,6 +1403,93 @@ func lowestGroups(ids []int64, groups map[int64]GroupSnapshot) []GroupRef {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+func cachedUpstreamMatches(accounts []sub2api.PoolAccount, cached *Snapshot) map[int64]upstreamMatch {
+	out := make(map[int64]upstreamMatch, len(accounts))
+	if cached == nil {
+		return out
+	}
+	previous := make(map[int64]AccountSnapshot, len(cached.Accounts))
+	for _, account := range cached.Accounts {
+		previous[account.ID] = account
+	}
+	for _, raw := range accounts {
+		identity := raw.Identity()
+		normalizedURL := normalizeURL(identity.BaseURL)
+		digest := identityDigest(normalizedURL, identity.APIKeySHA256)
+		old, exists := previous[raw.Account.ID]
+		sameIdentity := exists && ((digest != "" && old.IdentityDigest == digest) ||
+			(digest == "" && old.IdentityDigest == "" && old.UpstreamURL == normalizedURL))
+		if !sameIdentity {
+			state := "missing"
+			if identity.FingerprintSeen {
+				state = "present"
+			}
+			out[raw.Account.ID] = upstreamMatch{
+				status:         "refresh_pending",
+				fingerprint:    state,
+				identityDigest: digest,
+			}
+			continue
+		}
+		out[raw.Account.ID] = upstreamMatch{
+			status:         old.MatchStatus,
+			rate:           cloneFloat(old.UpstreamRate),
+			balance:        cloneFloat(old.Balance),
+			matched:        old.Availability.Matched,
+			fingerprint:    old.FingerprintState,
+			identityDigest: old.IdentityDigest,
+			rateAt:         cloneTime(old.UpstreamRateAt),
+			balanceAt:      cloneTime(old.BalanceAt),
+		}
+	}
+	return out
+}
+
+func (s *Service) refreshCachedBalances(
+	accounts []sub2api.PoolAccount,
+	matches map[int64]upstreamMatch,
+) {
+	if s.matcher == nil || s.matcher.channels == nil {
+		return
+	}
+	channels, err := s.matcher.channels.List()
+	if err != nil {
+		return
+	}
+	byURL := make(map[string][]upstreamCandidate)
+	for _, channel := range channels {
+		if !channel.MonitorEnabled {
+			continue
+		}
+		normalized := normalizeURL(channel.SiteURL)
+		if normalized == "" {
+			continue
+		}
+		byURL[normalized] = append(byURL[normalized], urlCandidate(channel, normalized))
+	}
+	for _, account := range accounts {
+		match := matches[account.Account.ID]
+		candidate, unique := uniqueURLCandidate(byURL[normalizeURL(account.Identity().BaseURL)])
+		if !unique || candidate.balance == nil {
+			continue
+		}
+		match.balance = cloneFloat(candidate.balance)
+		match.balanceAt = cloneTime(candidate.balanceAt)
+		matches[account.Account.ID] = match
+	}
+}
+
+func upstreamRateSource(status string) string {
+	switch status {
+	case "key_exact":
+		return "upstream_api_key"
+	case "account_mapping":
+		return "account_mapping"
+	default:
+		return ""
+	}
 }
 
 func skipReason(account AccountSnapshot) string {
@@ -1310,10 +1505,20 @@ func skipReason(account AccountSnapshot) string {
 	if !account.Availability.BalanceAvailable {
 		return "balance_missing"
 	}
-	if account.Balance != nil && *account.Balance > 0 && !account.Availability.RateAvailable {
+	if account.Balance != nil && *account.Balance > 0 && !trustedRateAvailable(account) {
 		return "multiplier_missing"
 	}
 	return ""
+}
+
+func trustedRateAvailable(account AccountSnapshot) bool {
+	if !account.Availability.RateAvailable {
+		return false
+	}
+	if account.Availability.RateTrusted {
+		return true
+	}
+	return account.MatchStatus == "" || account.MatchStatus == "key_exact"
 }
 
 func poolManagedAccount(account sub2api.AdminAccount) bool {

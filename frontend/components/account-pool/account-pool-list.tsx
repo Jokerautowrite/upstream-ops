@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, PauseCircle, ShieldAlert, ShieldCheck, TimerReset } from "lucide-react"
+import { AlertTriangle, CheckCircle2, ExternalLink, PauseCircle, ShieldAlert, ShieldCheck, TimerReset } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
@@ -20,7 +20,9 @@ import {
   accountGroupLabel,
   accountHealthLabel,
   accountHealthTone,
+  accountMatchLabel,
   accountMissingLabels,
+  accountMultiplierSourceLabel,
   accountSchedulableLabel,
   formatNumeric,
   isSchedulable,
@@ -148,6 +150,9 @@ function AccountCore({
           <div className="mt-0.5 font-semibold tabular-nums">
             {account.upstream_multiplier == null ? "—" : formatRatio(account.upstream_multiplier)}
           </div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground">
+            {accountMultiplierSourceLabel(account)}
+          </div>
         </div>
         <div className="rounded-md border border-border bg-muted/20 px-2 py-1.5">
           <div className="text-[10px] text-muted-foreground">余额</div>
@@ -165,6 +170,9 @@ function AccountCore({
           业务渠道：{accountBusinessChannel(account)}
         </Badge>
         <Badge variant="outline" className="min-w-0 max-w-full whitespace-normal rounded-md text-[11px]">
+          Sub2 分组倍率：{account.min_group_multiplier == null ? "—" : formatRatio(account.min_group_multiplier)}
+        </Badge>
+        <Badge variant="outline" className="min-w-0 max-w-full whitespace-normal rounded-md text-[11px]">
           今日请求：{formatNumeric(account.today_requests)}
         </Badge>
         <Badge variant="outline" className="min-w-0 max-w-full whitespace-normal rounded-md text-[11px]">
@@ -172,8 +180,28 @@ function AccountCore({
         </Badge>
       </div>
 
+      <div className="flex flex-wrap gap-1">
+        {(account.groups ?? []).map((group) => (
+          <Badge key={group.id} variant="secondary" className="rounded-md text-[10px]">
+            {group.name} {formatRatio(group.multiplier)}
+          </Badge>
+        ))}
+        {account.upstream_url ? (
+          <a
+            href={account.upstream_url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+          >
+            <ExternalLink className="size-3" />
+            打开上游
+          </a>
+        ) : null}
+      </div>
+
       <AccountHealthIcons account={account} />
       <AccountMissingChips account={account} />
+      <div className="text-[11px] text-muted-foreground">倍率诊断：{accountMatchLabel(account)}</div>
       {account.schedulable_reason ? (
         <div className="rounded-md border border-dashed border-border bg-muted/20 px-2 py-1.5 text-[11px] text-muted-foreground">
           调度说明：{account.schedulable_reason}
@@ -190,18 +218,18 @@ export function AccountPoolDesktopTable({
 }: AccountPoolListProps) {
   return (
     <div className="hidden overflow-x-auto rounded-lg border border-border bg-card shadow-sm lg:block">
-      <Table className="min-w-[1100px]">
+      <Table className="min-w-[1480px]">
         <TableHeader>
           <TableRow>
-            <TableHead className="w-48">账号</TableHead>
-            <TableHead className="w-28">平台 / 类型</TableHead>
-            <TableHead className="w-40">最低分组 / 渠道</TableHead>
-            <TableHead className="w-24">当前优先级</TableHead>
-            <TableHead className="w-24">建议优先级</TableHead>
-            <TableHead className="w-24">上游倍率</TableHead>
+            <TableHead className="w-52">账号</TableHead>
             <TableHead className="w-24">余额</TableHead>
-            <TableHead className="w-28">健康 / 限流</TableHead>
-            <TableHead className="w-28">今日请求 / 并发</TableHead>
+            <TableHead className="w-32">上游倍率</TableHead>
+            <TableHead className="w-32">Sub2 最低组</TableHead>
+            <TableHead className="w-56">完整分组</TableHead>
+            <TableHead className="w-44">上游地址</TableHead>
+            <TableHead className="w-36">异常 / 限流</TableHead>
+            <TableHead className="w-28">请求 / 并发</TableHead>
+            <TableHead className="w-32">优先级</TableHead>
             <TableHead className="w-20 text-right">调度</TableHead>
           </TableRow>
         </TableHeader>
@@ -214,37 +242,48 @@ export function AccountPoolDesktopTable({
                 <TableCell className="max-w-0">
                   <div className="min-w-0">
                     <div className="truncate font-medium">{account.name}</div>
-                    <div className="text-[11px] text-muted-foreground">#{account.id}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      #{account.id} · {account.platform || "—"} / {account.type || "—"}
+                    </div>
                   </div>
-                </TableCell>
-                <TableCell className="text-[11px] text-muted-foreground">
-                  <div className="flex flex-col">
-                    <span>{account.platform || "—"}</span>
-                    <span>{account.type || "—"}</span>
-                  </div>
-                </TableCell>
-                <TableCell className="max-w-0 text-[11px] text-muted-foreground">
-                  <div className="truncate">{accountGroupLabel(account)}</div>
-                  <div className="truncate text-muted-foreground/80">{accountBusinessChannel(account)}</div>
-                </TableCell>
-                <TableCell className="font-mono text-[12px] tabular-nums">
-                  {formatNumeric(account.current_priority)}
-                </TableCell>
-                <TableCell
-                  className={cn(
-                    "font-mono text-[12px] tabular-nums",
-                    account.suggested_priority != null &&
-                      account.current_priority !== account.suggested_priority &&
-                      "font-semibold text-warning",
-                  )}
-                >
-                  {formatNumeric(account.suggested_priority)}
-                </TableCell>
-                <TableCell className="font-mono text-[12px] tabular-nums">
-                  {account.upstream_multiplier == null ? "—" : formatRatio(account.upstream_multiplier)}
                 </TableCell>
                 <TableCell className={cn("font-mono text-[12px] tabular-nums", balanceTone === "debt" && "text-danger", balanceTone === "low" && "text-warning")}>
                   {account.balance == null ? "—" : decimal(account.balance, 4)}
+                </TableCell>
+                <TableCell className="text-[11px]">
+                  <div className="font-mono text-[12px] tabular-nums">
+                    {account.upstream_multiplier == null ? "—" : formatRatio(account.upstream_multiplier)}
+                  </div>
+                  <div className="text-muted-foreground">{accountMultiplierSourceLabel(account)}</div>
+                </TableCell>
+                <TableCell className="text-[11px]">
+                  <div className="truncate">{account.min_group || "—"}</div>
+                  <div className="font-mono text-muted-foreground">
+                    {account.min_group_multiplier == null ? "—" : formatRatio(account.min_group_multiplier)}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="flex max-w-56 flex-wrap gap-1">
+                    {(account.groups ?? []).map((group) => (
+                      <Badge key={group.id} variant="secondary" className="rounded-md text-[10px]">
+                        {group.name} {formatRatio(group.multiplier)}
+                      </Badge>
+                    ))}
+                  </div>
+                </TableCell>
+                <TableCell className="max-w-0 text-[11px]">
+                  {account.upstream_url ? (
+                    <a
+                      href={account.upstream_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                      title={account.upstream_url}
+                    >
+                      <ExternalLink className="size-3 shrink-0" />
+                      <span className="truncate">{account.upstream_url.replace(/^https?:\/\//, "")}</span>
+                    </a>
+                  ) : "—"}
                 </TableCell>
                 <TableCell className="text-[11px]">
                   <div className="flex flex-col gap-1">
@@ -262,6 +301,9 @@ export function AccountPoolDesktopTable({
                         {account.schedulable_reason}
                       </span>
                     ) : null}
+                    <span className="max-w-32 truncate text-[10px] text-muted-foreground" title={accountMatchLabel(account)}>
+                      {accountMatchLabel(account)}
+                    </span>
                   </div>
                 </TableCell>
                 <TableCell className="text-[11px] text-muted-foreground">
@@ -269,6 +311,10 @@ export function AccountPoolDesktopTable({
                   <div>
                     {account.current_concurrency == null ? "—" : `${account.current_concurrency}${account.max_concurrency != null ? ` / ${account.max_concurrency}` : ""}`}
                   </div>
+                </TableCell>
+                <TableCell className="font-mono text-[11px] tabular-nums">
+                  <div>{formatNumeric(account.current_priority)} → {formatNumeric(account.suggested_priority)}</div>
+                  <div className="font-sans text-[10px] text-muted-foreground">{accountBusinessChannel(account)}</div>
                 </TableCell>
                 <TableCell className="text-right">
                   <Switch

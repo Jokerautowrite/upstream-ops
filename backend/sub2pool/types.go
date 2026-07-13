@@ -83,6 +83,11 @@ type AutomationStore interface {
 	ListPreparedRuns(targetID uint, limit int) ([]RunRecord, error)
 }
 
+type SnapshotStore interface {
+	LoadSnapshot(targetID uint) (*Snapshot, *PriorityPreview, error)
+	SaveSnapshot(snapshot Snapshot, preview PriorityPreview) error
+}
+
 type LeaseStore interface {
 	AcquireLease(targetID uint, owner string, expiresAt time.Time) (bool, error)
 	RenewLease(targetID uint, owner string, expiresAt time.Time) (bool, error)
@@ -173,17 +178,22 @@ type AccountSnapshot struct {
 	CurrentConcurrency int           `json:"current_concurrency"`
 	MaxConcurrency     int           `json:"max_concurrency"`
 	GroupIDs           []int64       `json:"group_ids"`
+	Groups             []GroupRef    `json:"groups"`
 	LowestGroups       []GroupRef    `json:"lowest_groups"`
 	Channel            string        `json:"channel"`
+	UpstreamURL        string        `json:"upstream_url,omitempty"`
 	UpstreamRate       *float64      `json:"upstream_rate,omitempty"`
+	UpstreamRateSource string        `json:"upstream_rate_source,omitempty"`
+	UpstreamRateAt     *time.Time    `json:"upstream_rate_at,omitempty"`
 	Balance            *float64      `json:"balance,omitempty"`
+	BalanceAt          *time.Time    `json:"balance_at,omitempty"`
 	TodayStats         TodayStats    `json:"today_stats"`
 	Availability       Availability  `json:"availability"`
 	Health             AccountHealth `json:"health"`
 	SkipReason         string        `json:"skip_reason,omitempty"`
 	MatchStatus        string        `json:"match_status"`
 	FingerprintState   string        `json:"fingerprint_state"`
-	IdentityDigest     string        `json:"-"`
+	IdentityDigest     string        `json:"identity_digest,omitempty"`
 }
 
 type GroupRef struct {
@@ -203,6 +213,7 @@ type Availability struct {
 	BalanceAvailable bool `json:"balance_available"`
 	TodayStatsReady  bool `json:"today_stats_ready"`
 	RateAvailable    bool `json:"rate_available"`
+	RateTrusted      bool `json:"rate_trusted"`
 	Healthy          bool `json:"healthy"`
 }
 

@@ -41,6 +41,10 @@ type sub2PoolService interface {
 	RunAllEnabled(ctx context.Context)
 }
 
+type sub2PoolRefreshService interface {
+	RefreshAllEnabled(ctx context.Context)
+}
+
 func New(
 	cfg config.SchedulerConfig,
 	m *monitor.Service,
@@ -88,6 +92,11 @@ func (s *Scheduler) Start() error {
 			return err
 		}
 	}
+	if s.sub2Pool != nil {
+		if _, err := s.cron.AddFunc("0 */5 * * * *", s.runSub2PoolSnapshot); err != nil {
+			return err
+		}
+	}
 	s.cron.Start()
 	s.log.Info("scheduler started",
 		"balanceCron", s.cfg.BalanceCron,
@@ -117,6 +126,7 @@ func (s *Scheduler) runBalance() {
 			s.log.Warn("refresh captcha balances failed", "err", err)
 		}
 	}
+	s.runSub2PoolSnapshot()
 }
 
 func (s *Scheduler) runRates() {
@@ -141,6 +151,16 @@ func (s *Scheduler) runRates() {
 		defer poolCancel()
 		s.sub2Pool.RunAllEnabled(poolCtx)
 	}
+}
+
+func (s *Scheduler) runSub2PoolSnapshot() {
+	refresher, ok := s.sub2Pool.(sub2PoolRefreshService)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	refresher.RefreshAllEnabled(ctx)
 }
 
 func (s *Scheduler) hasRetention() bool {

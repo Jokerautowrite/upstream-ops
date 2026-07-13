@@ -40,7 +40,7 @@ func buildPriorityPreview(snapshot Snapshot) PriorityPreview {
 			raiseAccountFloors(channelFloor, groupFloor, account, account.CurrentPriority)
 			continue
 		}
-		if !account.Availability.RateAvailable {
+		if !trustedRateAvailable(account) {
 			preview.MissingMultiplierIDs = append(preview.MissingMultiplierIDs, account.ID)
 			if account.Balance == nil || *account.Balance > 0 {
 				reserveAccountPriority(reservedChannels, reservedGroups, account, account.CurrentPriority)

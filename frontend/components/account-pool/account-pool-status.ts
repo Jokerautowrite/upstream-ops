@@ -30,6 +30,35 @@ export function accountGroupLabel(account: Sub2PoolAccount) {
   return `${group} / ${channel}`
 }
 
+export function accountMatchLabel(account: Sub2PoolAccount) {
+  switch (account.match_status) {
+    case "key_exact":
+      return "API Key 精确匹配"
+    case "account_mapping":
+      return "账号映射，仅展示"
+    case "key_mismatch":
+      return "API Key 不一致"
+    case "key_ambiguous":
+      return "API Key 匹配不唯一"
+    case "fingerprint_missing":
+      return "Sub2 未提供 Key 指纹"
+    case "upstream_unavailable":
+      return "上游采集暂不可用"
+    case "url_missing":
+      return "上游地址缺失"
+    case "refresh_pending":
+      return "等待下次倍率扫描"
+    default:
+      return account.match_status || "未匹配"
+  }
+}
+
+export function accountMultiplierSourceLabel(account: Sub2PoolAccount) {
+  if (account.multiplier_confidence === "trusted") return "可信"
+  if (account.multiplier_source === "account_mapping") return "映射"
+  return account.upstream_multiplier == null ? "缺失" : "仅展示"
+}
+
 export function formatNumeric(value: number | null | undefined, fallback = "—") {
   if (value == null || !Number.isFinite(value)) return fallback
   return value.toLocaleString("zh-CN")

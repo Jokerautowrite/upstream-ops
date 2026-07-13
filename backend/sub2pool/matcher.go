@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bejix/upstream-ops/backend/connector"
 	"github.com/bejix/upstream-ops/backend/connector/sub2api"
@@ -23,6 +24,8 @@ type upstreamMatch struct {
 	matched        bool
 	fingerprint    string
 	identityDigest string
+	rateAt         *time.Time
+	balanceAt      *time.Time
 }
 
 type upstreamCandidate struct {
@@ -31,6 +34,8 @@ type upstreamCandidate struct {
 	rate          *float64
 	balance       *float64
 	todayCost     *float64
+	rateAt        *time.Time
+	balanceAt     *time.Time
 }
 
 type matcher struct {
@@ -201,6 +206,7 @@ func urlCandidate(channel storage.Channel, normalized string) upstreamCandidate 
 		normalizedURL: normalized,
 		balance:       cloneFloat(channel.LastBalance),
 		todayCost:     cloneFloat(channel.TodayCost),
+		balanceAt:     cloneTime(channel.LastBalanceAt),
 	}
 }
 
@@ -244,6 +250,7 @@ func withURLBalance(match upstreamMatch, candidates []upstreamCandidate) upstrea
 	}
 	match.balance = cloneFloat(candidate.balance)
 	match.todayCost = cloneFloat(candidate.todayCost)
+	match.balanceAt = cloneTime(candidate.balanceAt)
 	return match
 }
 
@@ -255,6 +262,8 @@ func makeExactMatch(candidate upstreamCandidate, fingerprint string) upstreamMat
 		todayCost:   candidate.todayCost,
 		matched:     true,
 		fingerprint: fingerprint,
+		rateAt:      cloneTime(candidate.rateAt),
+		balanceAt:   cloneTime(candidate.balanceAt),
 	}
 }
 
@@ -289,6 +298,8 @@ func (m *matcher) channelCandidates(ctx context.Context, channel storage.Channel
 				rate:          rate,
 				balance:       cloneFloat(channel.LastBalance),
 				todayCost:     cloneFloat(channel.TodayCost),
+				rateAt:        timePtr(time.Now()),
+				balanceAt:     cloneTime(channel.LastBalanceAt),
 			})
 		}
 		if keyPage.Pages <= page || len(keyPage.Items) < pageSize {
@@ -351,4 +362,16 @@ func cloneInt(value *int) *int {
 	}
 	copy := *value
 	return &copy
+}
+
+func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func timePtr(value time.Time) *time.Time {
+	return &value
 }

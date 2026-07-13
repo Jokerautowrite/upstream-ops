@@ -329,6 +329,13 @@ export interface Sub2PoolSnapshotSummary {
   debt_accounts?: number
   missing_multiplier_accounts?: number
   missing_data_accounts?: number
+  trusted_rate_accounts?: number
+}
+
+export interface Sub2PoolGroup {
+  id: number
+  name: string
+  multiplier: number
 }
 
 export interface Sub2PoolAccount {
@@ -338,10 +345,17 @@ export interface Sub2PoolAccount {
   type: string
   business_channel?: string | null
   min_group?: string | null
+  min_group_multiplier?: number | null
+  groups?: Sub2PoolGroup[]
+  upstream_url?: string | null
   current_priority?: number | null
   suggested_priority?: number | null
   upstream_multiplier?: number | null
+  multiplier_source?: string | null
+  multiplier_confidence?: "trusted" | "display_only" | "missing" | string
+  multiplier_updated_at?: string | null
   balance?: number | null
+  balance_updated_at?: string | null
   balance_status?: string | null
   health_status?: string | null
   rate_limit_status?: string | null
@@ -351,6 +365,8 @@ export interface Sub2PoolAccount {
   current_concurrency?: number | null
   max_concurrency?: number | null
   missing_data?: string[]
+  match_status?: string | null
+  fingerprint_state?: string | null
   updated_at?: string | null
 }
 

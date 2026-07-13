@@ -94,6 +94,15 @@ type GormPoolLease struct {
 
 func (GormPoolLease) TableName() string { return "sub2_pool_leases" }
 
+type GormPoolSnapshot struct {
+	TargetID     uint      `gorm:"primaryKey" json:"target_id"`
+	SnapshotJSON string    `gorm:"type:text;not null" json:"-"`
+	PreviewJSON  string    `gorm:"type:text;not null" json:"-"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func (GormPoolSnapshot) TableName() string { return "sub2_pool_snapshots" }
+
 type GormStateStore struct {
 	db *gorm.DB
 }
@@ -112,8 +121,42 @@ func (s *GormStateStore) AutoMigrate() error {
 		&GormPoolRun{},
 		&GormPoolAutomation{},
 		&GormPoolLease{},
+		&GormPoolSnapshot{},
 		&GormPoolAccountRateMapping{},
 	)
+}
+
+func (s *GormStateStore) LoadSnapshot(targetID uint) (*Snapshot, *PriorityPreview, error) {
+	var row GormPoolSnapshot
+	if err := s.db.First(&row, "target_id = ?", targetID).Error; err != nil {
+		return nil, nil, err
+	}
+	var snapshot Snapshot
+	var preview PriorityPreview
+	if err := json.Unmarshal([]byte(row.SnapshotJSON), &snapshot); err != nil {
+		return nil, nil, err
+	}
+	if err := json.Unmarshal([]byte(row.PreviewJSON), &preview); err != nil {
+		return nil, nil, err
+	}
+	return &snapshot, &preview, nil
+}
+
+func (s *GormStateStore) SaveSnapshot(snapshot Snapshot, preview PriorityPreview) error {
+	snapshotRaw, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	previewRaw, err := json.Marshal(preview)
+	if err != nil {
+		return err
+	}
+	return s.db.Save(&GormPoolSnapshot{
+		TargetID:     snapshot.TargetID,
+		SnapshotJSON: string(snapshotRaw),
+		PreviewJSON:  string(previewRaw),
+		UpdatedAt:    snapshot.GeneratedAt,
+	}).Error
 }
 
 func (s *GormStateStore) AcquireLease(targetID uint, owner string, expiresAt time.Time) (bool, error) {
@@ -584,6 +627,8 @@ type MemoryStateStore struct {
 	nextRun    uint
 	eventIDs   map[string]uint
 	leases     map[uint]GormPoolLease
+	snapshots  map[uint]Snapshot
+	previews   map[uint]PriorityPreview
 }
 
 func NewMemoryStateStore() *MemoryStateStore {
@@ -594,7 +639,28 @@ func NewMemoryStateStore() *MemoryStateStore {
 		runs:       map[uint]RunRecord{},
 		eventIDs:   map[string]uint{},
 		leases:     map[uint]GormPoolLease{},
+		snapshots:  map[uint]Snapshot{},
+		previews:   map[uint]PriorityPreview{},
 	}
+}
+
+func (s *MemoryStateStore) LoadSnapshot(targetID uint) (*Snapshot, *PriorityPreview, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot, exists := s.snapshots[targetID]
+	if !exists {
+		return nil, nil, gorm.ErrRecordNotFound
+	}
+	preview := s.previews[targetID]
+	return &snapshot, &preview, nil
+}
+
+func (s *MemoryStateStore) SaveSnapshot(snapshot Snapshot, preview PriorityPreview) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapshots[snapshot.TargetID] = snapshot
+	s.previews[snapshot.TargetID] = preview
+	return nil
 }
 
 func (s *MemoryStateStore) AcquireLease(targetID uint, owner string, expiresAt time.Time) (bool, error) {
