@@ -31,13 +31,14 @@ type upstreamMatch struct {
 }
 
 type upstreamCandidate struct {
-	channelID     uint
-	normalizedURL string
-	rate          *float64
-	balance       *float64
-	todayCost     *float64
-	rateAt        *time.Time
-	balanceAt     *time.Time
+	channelID      uint
+	normalizedURL  string
+	monitorEnabled bool
+	rate           *float64
+	balance        *float64
+	todayCost      *float64
+	rateAt         *time.Time
+	balanceAt      *time.Time
 }
 
 type matcher struct {
@@ -76,12 +77,23 @@ func (m *matcher) matchAccounts(ctx context.Context, accounts []sub2api.PoolAcco
 	if err != nil {
 		return nil, err
 	}
+	allChannels := append([]storage.Channel(nil), channels...)
 	channels = filterMonitorEnabledChannels(channels)
 	sort.Slice(channels, func(i, j int) bool { return channels[i].ID < channels[j].ID })
 
 	byURLKey := map[string]map[string][]upstreamCandidate{}
 	byURL := map[string][]upstreamCandidate{}
 	unavailableURLs := map[string]struct{}{}
+	for _, channel := range allChannels {
+		normalized := normalizeMappingURL(channel.SiteURL)
+		if normalized == "" {
+			continue
+		}
+		byURL[normalized] = append(
+			byURL[normalized],
+			urlCandidate(channel, normalized),
+		)
+	}
 	jobs := make(chan storage.Channel)
 	results := make(chan channelCandidateResult, len(channels))
 	workerCount := min(matcherChannelWorkerLimit, len(channels))
@@ -125,7 +137,6 @@ func (m *matcher) matchAccounts(ctx context.Context, accounts []sub2api.PoolAcco
 			unavailableURLs[result.normalized] = struct{}{}
 			continue
 		}
-		byURL[result.normalized] = append(byURL[result.normalized], result.urlCandidate)
 		for keyHash, keyCandidates := range result.candidates {
 			if byURLKey[result.normalized] == nil {
 				byURLKey[result.normalized] = map[string][]upstreamCandidate{}
@@ -179,13 +190,13 @@ func (m *matcher) matchAccounts(ctx context.Context, accounts []sub2api.PoolAcco
 					}
 				}
 			}
-			match = withURLBalance(match, byURL[normalized])
+			match = withURLBalance(match, byURL[normalizeMappingURL(identity.BaseURL)])
 			result[account.Account.ID] = match
 			continue
 		}
 		match = withURLBalance(
 			upstreamMatch{status: "fingerprint_missing", fingerprint: state},
-			byURL[normalized],
+			byURL[normalizeMappingURL(identity.BaseURL)],
 		)
 		result[account.Account.ID] = match
 	}
@@ -204,11 +215,12 @@ func filterMonitorEnabledChannels(channels []storage.Channel) []storage.Channel 
 
 func urlCandidate(channel storage.Channel, normalized string) upstreamCandidate {
 	return upstreamCandidate{
-		channelID:     channel.ID,
-		normalizedURL: normalized,
-		balance:       cloneFloat(channel.LastBalance),
-		todayCost:     cloneFloat(channel.TodayCost),
-		balanceAt:     cloneTime(channel.LastBalanceAt),
+		channelID:      channel.ID,
+		normalizedURL:  normalized,
+		monitorEnabled: channel.MonitorEnabled,
+		balance:        cloneFloat(channel.LastBalance),
+		todayCost:      cloneFloat(channel.TodayCost),
+		balanceAt:      cloneTime(channel.LastBalanceAt),
 	}
 }
 
@@ -229,6 +241,7 @@ func uniqueKeyCandidate(candidates []upstreamCandidate) (upstreamCandidate, bool
 }
 
 func uniqueURLCandidate(candidates []upstreamCandidate) (upstreamCandidate, bool) {
+	candidates = preferBalanceCandidates(candidates)
 	if len(candidates) == 0 {
 		return upstreamCandidate{}, false
 	}
@@ -240,6 +253,19 @@ func uniqueURLCandidate(candidates []upstreamCandidate) (upstreamCandidate, bool
 		}
 	}
 	return first, true
+}
+
+func preferBalanceCandidates(candidates []upstreamCandidate) []upstreamCandidate {
+	active := make([]upstreamCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.monitorEnabled {
+			active = append(active, candidate)
+		}
+	}
+	if len(active) > 0 {
+		return active
+	}
+	return candidates
 }
 
 func withURLBalance(match upstreamMatch, candidates []upstreamCandidate) upstreamMatch {

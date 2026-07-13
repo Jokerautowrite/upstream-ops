@@ -1689,10 +1689,7 @@ func (s *Service) refreshCachedBalances(
 	}
 	byURL := make(map[string][]upstreamCandidate)
 	for _, channel := range channels {
-		if !channel.MonitorEnabled {
-			continue
-		}
-		normalized := normalizeURL(channel.SiteURL)
+		normalized := normalizeMappingURL(channel.SiteURL)
 		if normalized == "" {
 			continue
 		}
@@ -1700,7 +1697,9 @@ func (s *Service) refreshCachedBalances(
 	}
 	for _, account := range accounts {
 		match := matches[account.Account.ID]
-		candidate, unique := uniqueURLCandidate(byURL[normalizeURL(account.Identity().BaseURL)])
+		candidate, unique := uniqueURLCandidate(
+			byURL[normalizeMappingURL(account.Identity().BaseURL)],
+		)
 		if !unique || candidate.balance == nil {
 			continue
 		}

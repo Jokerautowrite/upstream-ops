@@ -360,8 +360,31 @@ func TestMatcherIgnoresDisabledChannels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("match accounts: %v", err)
 	}
-	if matches[1].status != "key_mismatch" || matches[1].matched || matches[1].rate != nil || matches[1].balance != nil {
-		t.Fatalf("disabled channel affected matcher: %#v", matches[1])
+	if matches[1].status != "key_mismatch" || matches[1].matched || matches[1].rate != nil ||
+		matches[1].balance == nil || *matches[1].balance != 50 {
+		t.Fatalf("disabled channel balance fallback: %#v", matches[1])
+	}
+}
+
+func TestMatcherUsesBalanceFromURLAlias(t *testing.T) {
+	channels := &fakeChannels{items: []storage.Channel{{
+		ID:             7,
+		SiteURL:        "https://api.example.test/v1",
+		MonitorEnabled: true,
+		LastBalance:    floatPtr(50),
+	}}}
+	keys := &fakeKeys{
+		items:    map[uint][]connector.APIKey{7: {{ID: 11, GroupRatio: 0.05}}},
+		revealed: map[string]string{"7:11": "different-key"},
+	}
+	matches, err := newMatcher(channels, keys).matchAccounts(context.Background(), []sub2api.PoolAccount{
+		poolAccount(1, "https://example.test", "matching-key", 10),
+	})
+	if err != nil {
+		t.Fatalf("match accounts: %v", err)
+	}
+	if matches[1].status != "key_mismatch" || matches[1].balance == nil || *matches[1].balance != 50 {
+		t.Fatalf("URL alias balance fallback: %#v", matches[1])
 	}
 }
 
