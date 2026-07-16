@@ -1231,10 +1231,7 @@ func buildSub2CreateAPIKey(req connector.APIKeyCreateRequest) map[string]any {
 }
 
 func buildSub2UpdateAPIKey(req connector.APIKeyUpdateRequest) (map[string]any, error) {
-	body := map[string]any{
-		"ip_whitelist": safeStringSlice(req.IPWhitelist),
-		"ip_blacklist": safeStringSlice(req.IPBlacklist),
-	}
+	body := map[string]any{}
 	if req.Name != nil {
 		body["name"] = strings.TrimSpace(*req.Name)
 	}
@@ -1253,6 +1250,12 @@ func buildSub2UpdateAPIKey(req connector.APIKeyUpdateRequest) (map[string]any, e
 	}
 	if req.ExpiresAt != nil {
 		body["expires_at"] = strings.TrimSpace(*req.ExpiresAt)
+	}
+	if req.IPWhitelist != nil {
+		body["ip_whitelist"] = safeStringSlice(req.IPWhitelist)
+	}
+	if req.IPBlacklist != nil {
+		body["ip_blacklist"] = safeStringSlice(req.IPBlacklist)
 	}
 	if req.ResetQuota != nil {
 		body["reset_quota"] = *req.ResetQuota

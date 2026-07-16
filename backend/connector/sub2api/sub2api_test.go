@@ -710,6 +710,37 @@ func TestCreateUpdateDeleteRevealAPIKey(t *testing.T) {
 	}
 }
 
+func TestBuildSub2UpdateAPIKeyPreservesUnspecifiedIPLists(t *testing.T) {
+	groupID := int64(3)
+	body, err := buildSub2UpdateAPIKey(connector.APIKeyUpdateRequest{GroupID: &groupID})
+	if err != nil {
+		t.Fatalf("build group update: %v", err)
+	}
+	if body["group_id"] != groupID {
+		t.Fatalf("group_id = %#v", body["group_id"])
+	}
+	if _, ok := body["ip_whitelist"]; ok {
+		t.Fatalf("group-only update contains ip_whitelist: %#v", body)
+	}
+	if _, ok := body["ip_blacklist"]; ok {
+		t.Fatalf("group-only update contains ip_blacklist: %#v", body)
+	}
+
+	body, err = buildSub2UpdateAPIKey(connector.APIKeyUpdateRequest{
+		IPWhitelist: []string{},
+		IPBlacklist: []string{},
+	})
+	if err != nil {
+		t.Fatalf("build explicit empty ip update: %v", err)
+	}
+	if _, ok := body["ip_whitelist"]; !ok {
+		t.Fatalf("explicit empty ip_whitelist omitted: %#v", body)
+	}
+	if _, ok := body["ip_blacklist"]; !ok {
+		t.Fatalf("explicit empty ip_blacklist omitted: %#v", body)
+	}
+}
+
 func strPtr(v string) *string {
 	return &v
 }
