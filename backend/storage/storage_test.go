@@ -35,6 +35,82 @@ func openTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestAutoMigrateResetsLegacyDiscoveryQueueWithoutReusingCandidateIDs(t *testing.T) {
+	db, err := Open(DBConfig{
+		Driver: DBDriverSQLite,
+		Path:   filepath.Join(t.TempDir(), "legacy-discovery.db"),
+	})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("database handle: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	if err := AutoMigrate(db); err != nil {
+		t.Fatalf("initial migrate: %v", err)
+	}
+	if db.Migrator().HasIndex(&GroupDiscoveryCandidate{}, "ChannelType") {
+		if err := db.Migrator().DropIndex(&GroupDiscoveryCandidate{}, "ChannelType"); err != nil {
+			t.Fatalf("drop channel type index: %v", err)
+		}
+	}
+	if err := db.Migrator().DropColumn(&GroupDiscoveryCandidate{}, "ChannelType"); err != nil {
+		t.Fatalf("drop channel type column: %v", err)
+	}
+	now := time.Now()
+	if err := db.Table("group_discovery_candidates").Create(map[string]any{
+		"id":                  173,
+		"source_channel_id":   27,
+		"source_channel_name": "legacy",
+		"source_group_key":    "id:44",
+		"source_group_name":   "legacy plus",
+		"ratio":               0.01,
+		"status":              "applied",
+		"source_api_key_id":   15043,
+		"target_account_id":   6045,
+		"target_account_name": "legacy account",
+		"discovered_at":       now,
+		"last_seen_at":        now,
+	}).Error; err != nil {
+		t.Fatalf("insert legacy candidate: %v", err)
+	}
+
+	if err := AutoMigrate(db); err != nil {
+		t.Fatalf("channel-aware migrate: %v", err)
+	}
+	if !db.Migrator().HasColumn(&GroupDiscoveryCandidate{}, "ChannelType") {
+		t.Fatal("channel_type column was not created")
+	}
+	var count int64
+	if err := db.Model(&GroupDiscoveryCandidate{}).Count(&count).Error; err != nil {
+		t.Fatalf("count candidates: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("legacy candidates remaining = %d, want 0", count)
+	}
+
+	item := &GroupDiscoveryCandidate{
+		SourceChannelID:   1,
+		SourceChannelName: "new",
+		SourceGroupKey:    "id:1",
+		SourceGroupName:   "new plus",
+		Ratio:             0.02,
+		ChannelType:       "PLUS",
+		Status:            "pending",
+		DiscoveredAt:      now,
+		LastSeenAt:        now,
+	}
+	if err := NewGroupDiscoveryCandidates(db).Create(item); err != nil {
+		t.Fatalf("create new candidate: %v", err)
+	}
+	if item.ID <= 173 {
+		t.Fatalf("new candidate id = %d, must stay above legacy ownership marker 173", item.ID)
+	}
+}
+
 func TestAggregateBalanceTrend(t *testing.T) {
 	db := openTestDB(t)
 	rates := NewRates(db)

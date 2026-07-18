@@ -118,6 +118,9 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := dropDeletedAtColumns(db); err != nil {
 		return err
 	}
+	if err := resetLegacyGroupDiscoveryQueue(db); err != nil {
+		return err
+	}
 	return db.AutoMigrate(
 		&Channel{},
 		&AuthSession{},
@@ -139,6 +142,22 @@ func AutoMigrate(db *gorm.DB) error {
 		&GroupDiscoveryCandidate{},
 		&UpstreamSyncLog{},
 	)
+}
+
+// The channel-aware discovery release intentionally replaces the old full
+// queue. Clearing before AutoMigrate makes this a one-time migration: once the
+// channel_type column exists, subsequent starts preserve every tracked row.
+// DELETE does not reset the table sequence, so newly generated ownership
+// markers cannot collide with remote objects retained from the old queue.
+func resetLegacyGroupDiscoveryQueue(db *gorm.DB) error {
+	model := &GroupDiscoveryCandidate{}
+	if !db.Migrator().HasTable(model) || db.Migrator().HasColumn(model, "ChannelType") {
+		return nil
+	}
+	if err := db.Exec("DELETE FROM group_discovery_candidates").Error; err != nil {
+		return fmt.Errorf("reset legacy group discovery queue: %w", err)
+	}
+	return nil
 }
 
 func dropDeletedAtColumns(db *gorm.DB) error {

@@ -415,6 +415,10 @@ type GroupDiscoveryCandidate struct {
 	SourceGroupName        string  `gorm:"size:256;not null" json:"source_group_name"`
 	SourceGroupDescription string  `gorm:"type:text" json:"source_group_description,omitempty"`
 	Ratio                  float64 `gorm:"not null" json:"ratio"`
+	// ChannelType is the business channel bucket (PLUS/CC/Pro/Gemini/Image/CN/Other)
+	// derived from the source group name at scan time. Scan filtering keeps the
+	// lowest-ratio candidates per channel bucket.
+	ChannelType string `gorm:"size:32;not null;default:'Other';index" json:"channel_type"`
 
 	Status string `gorm:"size:32;not null;default:'pending';index" json:"status"`
 

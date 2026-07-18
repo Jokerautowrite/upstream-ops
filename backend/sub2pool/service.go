@@ -23,6 +23,7 @@ type Service struct {
 	state               StateStore
 	auto                AutomationStore
 	leases              LeaseStore
+	snapshots           SnapshotCacheStore
 	cfg                 Config
 	leaseOwner          string
 
@@ -53,6 +54,9 @@ func New(
 	if leases, ok := state.(LeaseStore); ok {
 		service.leases = leases
 	}
+	if snapshots, ok := state.(SnapshotCacheStore); ok {
+		service.snapshots = snapshots
+	}
 	service.leaseOwner = fmt.Sprintf("upstream-ops-%d-%p", time.Now().UnixNano(), service)
 	return service
 }
@@ -67,27 +71,49 @@ func (s *Service) SetAccountRateMappingStore(store AccountRateMappingStore, rate
 }
 
 func (s *Service) Snapshot(ctx context.Context, targetID uint) (*Snapshot, error) {
-	target, err := s.targetAccess(targetID)
+	snapshot, _, err := s.SnapshotPreview(ctx, targetID)
 	if err != nil {
 		return nil, err
 	}
-	snapshot, err := s.snapshot(ctx, targetID, target)
-	if err != nil {
-		return nil, err
+	return snapshot, nil
+}
+
+// CachedSnapshotPreview returns the latest persisted snapshot without touching
+// the upstream admin API. A missing row is reported instead of falling back to
+// a live pull.
+func (s *Service) CachedSnapshotPreview(_ context.Context, targetID uint) (*Snapshot, *PriorityPreview, error) {
+	if err := s.targetExists(targetID); err != nil {
+		return nil, nil, err
 	}
-	return &snapshot, nil
+	if s.snapshots == nil {
+		return nil, nil, ErrUnavailable
+	}
+	snapshot, preview, err := s.snapshots.LoadCachedSnapshot(targetID)
+	if err != nil {
+		return nil, nil, ErrUnavailable
+	}
+	if snapshot == nil || preview == nil {
+		return nil, nil, ErrSnapshotCacheMissing
+	}
+	return snapshot, preview, nil
+}
+
+func (s *Service) saveSnapshotCache(snapshot *Snapshot, preview *PriorityPreview) error {
+	if s.snapshots == nil {
+		return ErrUnavailable
+	}
+	if err := s.snapshots.SaveCachedSnapshot(snapshot, preview); err != nil {
+		return ErrUnavailable
+	}
+	return nil
 }
 
 func (s *Service) Preview(ctx context.Context, targetID uint) (*PriorityPreview, error) {
-	target, err := s.targetAccess(targetID)
+	_, preview, err := s.SnapshotPreview(ctx, targetID)
 	if err != nil {
 		return nil, err
 	}
-	_, preview, err := s.snapshotPreview(ctx, targetID, target)
-	if err != nil {
-		return nil, err
-	}
-	return &preview, nil
+	return preview, nil
 }
 
 // SnapshotPreview reads one account view for both display and preview
@@ -99,6 +125,9 @@ func (s *Service) SnapshotPreview(ctx context.Context, targetID uint) (*Snapshot
 	}
 	snapshot, preview, err := s.snapshotPreview(ctx, targetID, target)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.saveSnapshotCache(&snapshot, &preview); err != nil {
 		return nil, nil, err
 	}
 	return &snapshot, &preview, nil
@@ -114,6 +143,7 @@ func (s *Service) snapshotPreview(ctx context.Context, targetID uint, target sub
 		return Snapshot{}, PriorityPreview{}, err
 	}
 	preview := buildPriorityPreview(snapshot)
+	preview.GeneratedAt = snapshot.GeneratedAt
 	preview.Guards = validateGuards(snapshot, preview, previous, s.cfg)
 	addPriorityTransitionGuard(snapshot, &preview)
 	return snapshot, preview, nil
@@ -332,7 +362,35 @@ func (s *Service) Run(ctx context.Context, targetID uint) (*RunResult, error) {
 	if err := s.finalizeRun(ctx, result, runStatus, nextState, event, intent); err != nil {
 		return nil, err
 	}
+	s.cachePriorityResult(&snapshot, nextState, result.Apply)
 	return result, nil
+}
+
+func (s *Service) cachePriorityResult(snapshot *Snapshot, state TargetState, result *ApplyResult) {
+	if snapshot == nil || s.snapshots == nil {
+		return
+	}
+	if result != nil {
+		priorities := make(map[int64]int, len(result.Applied))
+		for _, item := range result.Applied {
+			priority := item.TargetPriority
+			if item.AfterPriority != nil {
+				priority = *item.AfterPriority
+			}
+			priorities[item.AccountID] = priority
+		}
+		for i := range snapshot.Accounts {
+			if priority, exists := priorities[snapshot.Accounts[i].ID]; exists {
+				snapshot.Accounts[i].CurrentPriority = priority
+			}
+		}
+	}
+	snapshot.GeneratedAt = time.Now()
+	preview := buildPriorityPreview(*snapshot)
+	preview.GeneratedAt = snapshot.GeneratedAt
+	preview.Guards = validateGuards(*snapshot, preview, state, s.cfg)
+	addPriorityTransitionGuard(*snapshot, &preview)
+	_ = s.saveSnapshotCache(snapshot, &preview)
 }
 
 func (s *Service) finalizeRun(

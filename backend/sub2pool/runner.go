@@ -48,6 +48,9 @@ func (r *Runner) RunAllEnabled(ctx context.Context) {
 			continue
 		}
 		if !status.Enabled {
+			if _, _, err := r.service.SnapshotPreview(ctx, target.ID); err != nil {
+				r.warn("refresh Sub2 pool snapshot cache failed", "target", target.ID, "err", err)
+			}
 			continue
 		}
 		result, err := r.service.Run(ctx, target.ID)

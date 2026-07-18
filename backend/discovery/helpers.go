@@ -202,7 +202,9 @@ func shouldSetDefaultAccountName(item *storage.GroupDiscoveryCandidate) bool {
 		return false
 	}
 	accountName := strings.TrimSpace(item.AccountName)
-	return accountName == "" || accountName == strings.TrimSpace(item.SourceGroupName)
+	return accountName == "" ||
+		accountName == strings.TrimSpace(item.SourceGroupName) ||
+		accountName == defaultAccountName(item.SourceGroupName, item.ID)
 }
 
 func discoveryAccountMarker(candidateID uint) string {
@@ -268,8 +270,13 @@ func modelMapping(models []string) map[string]string {
 	return mapping
 }
 
+// sortedCandidates orders candidates by channel bucket, then ratio, with
+// stable name/id tiebreakers. Callers receive the input slice back, sorted.
 func sortedCandidates(items []storage.GroupDiscoveryCandidate) []storage.GroupDiscoveryCandidate {
 	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].ChannelType != items[j].ChannelType {
+			return items[i].ChannelType < items[j].ChannelType
+		}
 		if items[i].Ratio != items[j].Ratio {
 			return items[i].Ratio < items[j].Ratio
 		}
@@ -282,4 +289,35 @@ func sortedCandidates(items []storage.GroupDiscoveryCandidate) []storage.GroupDi
 		return items[i].ID < items[j].ID
 	})
 	return items
+}
+
+// filterTopNPerChannel keeps, per channel bucket, the candidates with the
+// lowest source ratio. The cutoff widens past topN so every candidate tied at
+// the boundary ratio is kept. topN <= 0 keeps everything.
+func filterTopNPerChannel(items []storage.GroupDiscoveryCandidate, topN int) []storage.GroupDiscoveryCandidate {
+	if topN <= 0 || len(items) == 0 {
+		return items
+	}
+	sortedCandidates(items)
+	out := make([]storage.GroupDiscoveryCandidate, 0, len(items))
+	keptInChannel := 0
+	var cutoffRatio float64
+	for index, item := range items {
+		if index == 0 || item.ChannelType != items[index-1].ChannelType {
+			keptInChannel = 0
+			cutoffRatio = 0
+		}
+		if keptInChannel < topN {
+			out = append(out, item)
+			keptInChannel++
+			if keptInChannel == topN {
+				cutoffRatio = item.Ratio
+			}
+			continue
+		}
+		if item.Ratio == cutoffRatio {
+			out = append(out, item)
+		}
+	}
+	return out
 }

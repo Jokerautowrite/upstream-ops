@@ -322,6 +322,13 @@ func channelRank(channel string) int {
 	return len(channelOrder)
 }
 
+// ClassifyChannel exposes classifyChannel to sibling packages (e.g. discovery)
+// so the channel buckets never drift between pool scheduling and candidate
+// filtering. It is a pure wrapper; the classification logic stays here.
+func ClassifyChannel(groupName string) string {
+	return classifyChannel(groupName)
+}
+
 func classifyChannel(lowestGroupName string) string {
 	name := strings.ToLower(strings.TrimSpace(lowestGroupName))
 	switch {

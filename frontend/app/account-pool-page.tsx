@@ -8,6 +8,7 @@ import { AccountPoolAutomationCard } from "@/components/account-pool/account-poo
 import {
   AccountPoolFilters,
   type AccountPoolFilterState,
+  type AccountPoolSort,
 } from "@/components/account-pool/account-pool-filters"
 import {
   AccountPoolDesktopTable,
@@ -28,7 +29,6 @@ import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { apiFetch } from "@/lib/api"
-import { useTriggerRefresh } from "@/lib/refresh-context"
 import {
   useSub2PoolAutomation,
   useSub2PoolSnapshot,
@@ -49,6 +49,32 @@ const defaultFilters: AccountPoolFilterState = {
   schedule: "all",
   health: "all",
   missing: "all",
+  sort: "upstream_multiplier_asc",
+}
+
+function compareAccounts(a: Sub2PoolAccount, b: Sub2PoolAccount, sort: AccountPoolSort) {
+  const separator = sort.lastIndexOf("_")
+  const key = sort.slice(0, separator) as
+    | "name"
+    | "current_priority"
+    | "suggested_priority"
+    | "upstream_multiplier"
+    | "balance"
+  const direction = sort.slice(separator + 1) === "desc" ? -1 : 1
+
+  if (key === "name") {
+    const compared = (a.name || "").localeCompare(b.name || "", "zh-CN")
+    return compared === 0 ? a.id - b.id : compared * direction
+  }
+  const left = a[key]
+  const right = b[key]
+  const leftMissing = left == null || !Number.isFinite(left)
+  const rightMissing = right == null || !Number.isFinite(right)
+  if (leftMissing && rightMissing) return a.id - b.id
+  if (leftMissing) return 1
+  if (rightMissing) return -1
+  if (left === right) return a.id - b.id
+  return (left < right ? -1 : 1) * direction
 }
 
 function deriveSummary(accounts: Sub2PoolAccount[], fallback?: Sub2PoolSnapshotSummary | null) {
@@ -108,7 +134,6 @@ export default function AccountPoolPage() {
   const [targetID, setTargetID] = useState<string | null>(null)
   const snapshot = useSub2PoolSnapshot(targetID)
   const automation = useSub2PoolAutomation(targetID)
-  const triggerRefresh = useTriggerRefresh()
   const { confirm, dialog: confirmDialog } = useConfirm()
 
   const [filters, setFilters] = useState<AccountPoolFilterState>(defaultFilters)
@@ -121,6 +146,7 @@ export default function AccountPoolPage() {
   const [applying, setApplying] = useState(false)
   const [applyConflict, setApplyConflict] = useState<string | null>(null)
   const [automationUpdating, setAutomationUpdating] = useState(false)
+  const [snapshotDirty, setSnapshotDirty] = useState(false)
 
   useEffect(() => {
     const list = targets.data ?? []
@@ -135,6 +161,7 @@ export default function AccountPoolPage() {
     setPreviewError(null)
     setApplyConflict(null)
     setApplyOpen(false)
+    setSnapshotDirty(false)
   }, [targetID])
 
   const snapshotMatchesTarget = snapshot.data?.target_id != null && String(snapshot.data.target_id) === targetID
@@ -159,7 +186,7 @@ export default function AccountPoolPage() {
 
   const filteredAccounts = useMemo(() => {
     const query = filters.query.trim().toLowerCase()
-    return accounts.filter((account) => {
+    const filtered = accounts.filter((account) => {
       if (query) {
         const haystack = [
           String(account.id),
@@ -168,6 +195,12 @@ export default function AccountPoolPage() {
           account.type,
           account.business_channel ?? "",
           account.min_group ?? "",
+          account.upstream_multiplier ?? "",
+          account.balance ?? "",
+          account.current_priority ?? "",
+          account.suggested_priority ?? "",
+          account.health_status ?? "",
+          account.schedulable_reason ?? "",
         ]
           .join(" ")
           .toLowerCase()
@@ -183,6 +216,7 @@ export default function AccountPoolPage() {
       if (filters.health !== "all" && accountHealthTone(account) !== filters.health) return false
       return matchesMissingFilter(account, filters.missing)
     })
+    return filtered.sort((a, b) => compareAccounts(a, b, filters.sort))
   }, [accounts, filters])
 
   useEffect(() => {
@@ -197,13 +231,24 @@ export default function AccountPoolPage() {
     }
   }, [currentSnapshot?.snapshot_signature, preview])
 
-  function handleRefresh() {
+  async function handleRefresh() {
+    if (!targetID) return
     setPreview(null)
     setApplyOpen(false)
     setApplyConflict(null)
     setRefreshing(true)
-    triggerRefresh()
-    window.setTimeout(() => setRefreshing(false), 800)
+    try {
+      const result = await apiFetch<NonNullable<typeof snapshot.data>>(
+        `/sub2-pool/targets/${encodeURIComponent(targetID)}/snapshot`,
+      )
+      snapshot.setData(result)
+      setSnapshotDirty(false)
+      toast.success("账号池快照已刷新")
+    } catch (err) {
+      toast.error(errorMessage(err, "刷新账号池快照失败"))
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   async function handleToggleSchedulable(account: Sub2PoolAccount, next: boolean) {
@@ -244,8 +289,8 @@ export default function AccountPoolPage() {
       setPreview(null)
       setApplyOpen(false)
       setApplyConflict(null)
+      setSnapshotDirty(true)
       toast.success(result.message ?? (result.schedulable ? "已恢复调度" : "已暂停调度"))
-      triggerRefresh()
     } catch (err) {
       toast.error(errorMessage(err, "更新调度状态失败"))
     } finally {
@@ -293,14 +338,14 @@ export default function AccountPoolPage() {
       if (result.summary?.combined_result === "partial" || (result.failed?.length ?? 0) > 0) {
         const message = `部分写入成功，${result.failed?.length ?? 0} 个账号未完成。请刷新后重新生成预览。`
         setApplyConflict(message)
+        setSnapshotDirty(true)
         toast.error(message)
-        triggerRefresh()
         return
       }
       toast.success(result.message || "已应用优先级预览")
       setPreview(null)
       setApplyOpen(false)
-      triggerRefresh()
+      setSnapshotDirty(true)
     } catch (err) {
       const status = (err as { status?: number }).status
       const message =
@@ -339,7 +384,6 @@ export default function AccountPoolPage() {
         automation.setData({ target_id: targetID, enabled: result.enabled, updated_at: result.updated_at })
       }
       toast.success(result.message ?? (enabled ? "已开启自动化" : "已关闭自动化"))
-      triggerRefresh()
     } catch (err) {
       toast.error(errorMessage(err, "更新自动化状态失败"))
     } finally {
@@ -398,7 +442,7 @@ export default function AccountPoolPage() {
           <EmptyTitle>账号池快照加载失败</EmptyTitle>
           <EmptyDescription>{snapshot.error}</EmptyDescription>
         </EmptyHeader>
-        <Button type="button" variant="outline" onClick={snapshot.refetch} className="gap-1.5">
+        <Button type="button" variant="outline" onClick={() => void handleRefresh()} className="gap-1.5">
           <RefreshCw className="size-3.5" />
           重试
         </Button>
@@ -415,12 +459,18 @@ export default function AccountPoolPage() {
         refreshedAt={currentSnapshot?.refreshed_at}
         loading={refreshing || snapshot.loading || targetChanging}
         onTargetChange={setTargetID}
-        onRefresh={handleRefresh}
+        onRefresh={() => void handleRefresh()}
       />
 
       {snapshot.error && currentSnapshot ? (
         <div className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs text-warning">
           最新刷新失败，当前展示的是上一次成功快照：{snapshot.error}
+        </div>
+      ) : null}
+
+      {snapshotDirty ? (
+        <div className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs text-warning">
+          账号池状态已变更，当前仍展示上次缓存。点击“刷新”读取最新状态后再生成优先级预览。
         </div>
       ) : null}
 
@@ -445,13 +495,23 @@ export default function AccountPoolPage() {
           preview={preview}
           loading={previewLoading}
           error={previewError}
-          disabled={!targetID || !currentSnapshot || targetChanging || accounts.length === 0}
+          disabled={!targetID || !currentSnapshot || targetChanging || snapshotDirty || accounts.length === 0}
           onGenerate={handleGeneratePreview}
           onOpenApply={() => setApplyOpen(true)}
         />
       </div>
 
-      {accounts.length === 0 ? (
+      {!currentSnapshot ? (
+        <Empty className="border border-border bg-card">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <Database className="size-5" />
+            </EmptyMedia>
+            <EmptyTitle>暂无缓存数据</EmptyTitle>
+            <EmptyDescription>点击上方“刷新”读取当前账号池并保存为最新缓存。</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : accounts.length === 0 ? (
         <Empty className="border border-border bg-card">
           <EmptyHeader>
             <EmptyMedia variant="icon">
@@ -480,6 +540,8 @@ export default function AccountPoolPage() {
             accounts={filteredAccounts}
             busyAccountID={busyAccountID}
             onToggleSchedulable={handleToggleSchedulable}
+            sort={filters.sort}
+            onSortChange={(sort) => setFilters((current) => ({ ...current, sort }))}
           />
           <AccountPoolMobileCards
             accounts={filteredAccounts}

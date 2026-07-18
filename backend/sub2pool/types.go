@@ -114,6 +114,13 @@ type RateSnapshotStore interface {
 	ListByChannel(channelID uint) ([]storage.RateSnapshot, error)
 }
 
+// SnapshotCacheStore persists the latest successful account-pool snapshot per
+// target so the page can render cached data without hitting the upstream.
+type SnapshotCacheStore interface {
+	LoadCachedSnapshot(targetID uint) (*Snapshot, *PriorityPreview, error)
+	SaveCachedSnapshot(snapshot *Snapshot, preview *PriorityPreview) error
+}
+
 func (c Config) withDefaults() Config {
 	if c.MinimumAccountCount <= 0 {
 		c.MinimumAccountCount = 20
@@ -373,10 +380,11 @@ func isPublicError(err error, code string) bool {
 }
 
 var (
-	ErrPreviewConflict = &PublicError{Code: "preview_conflict"}
-	ErrGuardBlocked    = &PublicError{Code: "guard_blocked"}
-	ErrNotFound        = &PublicError{Code: "target_not_found"}
-	ErrUnavailable     = &PublicError{Code: "pool_unavailable"}
-	ErrInvalidInput    = &PublicError{Code: "invalid_input"}
-	ErrBusy            = &PublicError{Code: "target_busy"}
+	ErrPreviewConflict      = &PublicError{Code: "preview_conflict"}
+	ErrGuardBlocked         = &PublicError{Code: "guard_blocked"}
+	ErrNotFound             = &PublicError{Code: "target_not_found"}
+	ErrUnavailable          = &PublicError{Code: "pool_unavailable"}
+	ErrInvalidInput         = &PublicError{Code: "invalid_input"}
+	ErrBusy                 = &PublicError{Code: "target_busy"}
+	ErrSnapshotCacheMissing = &PublicError{Code: "snapshot_cache_missing"}
 )

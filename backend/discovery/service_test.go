@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/bejix/upstream-ops/backend/connector"
 	"github.com/bejix/upstream-ops/backend/storage"
+	"github.com/bejix/upstream-ops/backend/sub2pool"
 	"gorm.io/gorm"
 )
 
@@ -33,21 +35,23 @@ type discoveryChannelServiceFake struct {
 	keysByChannel   map[uint][]connector.APIKey
 	nextKeyID       int64
 
-	groupCallsByChannel map[uint]int
-	listKeyCalls        int
-	createCalls         int
-	updateCalls         int
-	revealCalls         int
-	lastCreate          connector.APIKeyCreateRequest
-	lastUpdate          connector.APIKeyUpdateRequest
+	groupCallsByChannel  map[uint]int
+	groupErrorsByChannel map[uint]error
+	listKeyCalls         int
+	createCalls          int
+	updateCalls          int
+	revealCalls          int
+	lastCreate           connector.APIKeyCreateRequest
+	lastUpdate           connector.APIKeyUpdateRequest
 }
 
 func newDiscoveryChannelServiceFake() *discoveryChannelServiceFake {
 	return &discoveryChannelServiceFake{
-		groupsByChannel:     map[uint][]connector.APIKeyGroup{},
-		keysByChannel:       map[uint][]connector.APIKey{},
-		nextKeyID:           100,
-		groupCallsByChannel: map[uint]int{},
+		groupsByChannel:      map[uint][]connector.APIKeyGroup{},
+		keysByChannel:        map[uint][]connector.APIKey{},
+		nextKeyID:            100,
+		groupCallsByChannel:  map[uint]int{},
+		groupErrorsByChannel: map[uint]error{},
 	}
 }
 
@@ -55,6 +59,9 @@ func (f *discoveryChannelServiceFake) ListAPIKeyGroups(_ context.Context, channe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.groupCallsByChannel[channelID]++
+	if err := f.groupErrorsByChannel[channelID]; err != nil {
+		return nil, err
+	}
 	return append([]connector.APIKeyGroup(nil), f.groupsByChannel[channelID]...), nil
 }
 
@@ -488,7 +495,9 @@ func seedDiscoveryTarget(t *testing.T, db *gorm.DB, baseURL string) *storage.Ups
 	return target
 }
 
-func scanDiscoveryCandidate(t *testing.T, svc *Service, source *storage.Channel, sourceGroup connector.APIKeyGroup) *storage.GroupDiscoveryCandidate {
+// seedDiscoveredGroup scans a single group and returns its persisted candidate.
+// The candidate ID exists only after the scan, so callers must reload it.
+func seedDiscoveredGroup(t *testing.T, svc *Service, source *storage.Channel, sourceGroup connector.APIKeyGroup) *storage.GroupDiscoveryCandidate {
 	t.Helper()
 	fake, ok := svc.channelSvc.(*discoveryChannelServiceFake)
 	if !ok {
@@ -497,16 +506,22 @@ func scanDiscoveryCandidate(t *testing.T, svc *Service, source *storage.Channel,
 	fake.mu.Lock()
 	fake.groupsByChannel[source.ID] = []connector.APIKeyGroup{sourceGroup}
 	fake.mu.Unlock()
-	result, err := svc.Scan(context.Background())
+	result, err := svc.Scan(context.Background(), ScanOptions{})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if result.NewCandidates != 1 {
-		t.Fatalf("scan new candidates = %d, want 1", result.NewCandidates)
+	if result.SelectedCandidates != 1 {
+		t.Fatalf("scan selected candidates = %d, want 1", result.SelectedCandidates)
 	}
 	item, err := svc.candidates.FindBySource(source.ID, sourceGroupKey(sourceGroup))
 	if err != nil {
 		t.Fatalf("find scanned candidate: %v", err)
+	}
+	if item.AccountName == "" {
+		item.AccountName = defaultAccountName(item.SourceGroupName, item.ID)
+		if err := svc.candidates.Update(item); err != nil {
+			t.Fatalf("name seeded candidate: %v", err)
+		}
 	}
 	return item
 }
@@ -527,7 +542,210 @@ func approveDiscoveryCandidate(t *testing.T, svc *Service, candidate *storage.Gr
 	return item
 }
 
-func TestScanOnlyReadsSourceGroupsAndPreservesReviewState(t *testing.T) {
+func candidateChannelTypes(t *testing.T, db *gorm.DB) map[string]string {
+	t.Helper()
+	items, err := storage.NewGroupDiscoveryCandidates(db).List()
+	if err != nil {
+		t.Fatalf("list candidates: %v", err)
+	}
+	out := make(map[string]string, len(items))
+	for _, item := range items {
+		out[item.SourceChannelName+"/"+item.SourceGroupName] = item.ChannelType
+	}
+	return out
+}
+
+func TestScanClassifiesGroupsIntoChannelBuckets(t *testing.T) {
+	db := openDiscoveryTestDB(t)
+	channelSvc := newDiscoveryChannelServiceFake()
+	svc := newDiscoveryTestService(db, channelSvc)
+	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
+	channelSvc.groupsByChannel[source.ID] = []connector.APIKeyGroup{
+		{Name: "Plus 主力", Ratio: 1},
+		{Name: "Claude Code 专区", Ratio: 1},
+		{Name: "Pro 备用", Ratio: 1},
+		{Name: "Gemini 2.5", Ratio: 1},
+		{Name: "Image 生图", Ratio: 1},
+		{Name: "CN DeepSeek", Ratio: 1},
+		{Name: "纯文字分组", Ratio: 1},
+	}
+
+	result, err := svc.Scan(context.Background(), ScanOptions{})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if result.SelectedCandidates != 7 {
+		t.Fatalf("selected candidates = %d, want 7", result.SelectedCandidates)
+	}
+	got := candidateChannelTypes(t, db)
+	want := map[string]string{
+		"source/Plus 主力":        sub2pool.ChannelPLUS,
+		"source/Claude Code 专区": sub2pool.ChannelCC,
+		"source/Pro 备用":         sub2pool.ChannelPro,
+		"source/Gemini 2.5":     sub2pool.ChannelGemini,
+		"source/Image 生图":       sub2pool.ChannelImage,
+		"source/CN DeepSeek":    sub2pool.ChannelCN,
+		"source/纯文字分组":          sub2pool.ChannelOther,
+	}
+	for key, wantType := range want {
+		if got[key] != wantType {
+			t.Fatalf("channel type for %q = %q, want %q", key, got[key], wantType)
+		}
+	}
+	if sub2pool.ClassifyChannel("Claude Code 专区") != sub2pool.ChannelCC {
+		t.Fatalf("sub2pool.ClassifyChannel wrapper does not match pool classification")
+	}
+}
+
+func TestScanKeepsLowestRatioCandidatesPerChannelWithTies(t *testing.T) {
+	db := openDiscoveryTestDB(t)
+	channelSvc := newDiscoveryChannelServiceFake()
+	svc := newDiscoveryTestService(db, channelSvc)
+	alpha := seedDiscoveryChannel(t, db, "alpha", storage.ChannelTypeSub2API, true)
+	beta := seedDiscoveryChannel(t, db, "beta", storage.ChannelTypeSub2API, true)
+	channelSvc.groupsByChannel[alpha.ID] = []connector.APIKeyGroup{
+		{Name: "plus cheap", Ratio: 0.1},
+		{Name: "plus mid a", Ratio: 0.2},
+		{Name: "plus mid b", Ratio: 0.2},
+		{Name: "plus expensive", Ratio: 0.9},
+		{Name: "claude only", Ratio: 5},
+	}
+	channelSvc.groupsByChannel[beta.ID] = []connector.APIKeyGroup{
+		{Name: "plus beta low", Ratio: 0.15},
+	}
+
+	result, err := svc.Scan(context.Background(), ScanOptions{TopNPerChannel: 3})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	// PLUS is ranked globally across every source channel. The third position
+	// has two independent 0.2 groups, so both ties are retained. CC is ranked
+	// independently and keeps its only group.
+	if result.SelectedCandidates != 5 {
+		t.Fatalf("selected candidates = %d, want 5", result.SelectedCandidates)
+	}
+	items, err := svc.candidates.List()
+	if err != nil {
+		t.Fatalf("list candidates: %v", err)
+	}
+	kept := make(map[string]float64, len(items))
+	for _, item := range items {
+		kept[item.SourceGroupName] = item.Ratio
+		if item.Status != statusPending {
+			t.Fatalf("scanned candidate is not pending: %#v", item)
+		}
+	}
+	want := map[string]float64{
+		"plus cheap":    0.1,
+		"plus mid a":    0.2,
+		"plus mid b":    0.2,
+		"claude only":   5,
+		"plus beta low": 0.15,
+	}
+	if len(kept) != len(want) {
+		t.Fatalf("kept groups = %v, want %v", kept, want)
+	}
+	for name, ratio := range want {
+		if kept[name] != ratio {
+			t.Fatalf("group %q ratio = %v, want %v (kept: %v)", name, kept[name], ratio, kept)
+		}
+	}
+	if _, dropped := kept["plus expensive"]; dropped {
+		t.Fatalf("filtered group survived: %v", kept)
+	}
+}
+
+func TestScanTopNConfigDefaultsAndOverrides(t *testing.T) {
+	seed := func(t *testing.T) (*gorm.DB, *Service) {
+		db := openDiscoveryTestDB(t)
+		channelSvc := newDiscoveryChannelServiceFake()
+		svc := newDiscoveryTestService(db, channelSvc)
+		source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
+		groups := make([]connector.APIKeyGroup, 0, 7)
+		for i := 0; i < 7; i++ {
+			groups = append(groups, connector.APIKeyGroup{
+				Name:  fmt.Sprintf("plus-%02d", i),
+				Ratio: float64(i + 1),
+			})
+		}
+		channelSvc.groupsByChannel[source.ID] = groups
+		return db, svc
+	}
+
+	t.Run("default keeps five", func(t *testing.T) {
+		_, svc := seed(t)
+		result, err := svc.Scan(context.Background(), ScanOptions{})
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if result.SelectedCandidates != defaultTopNPerChannel {
+			t.Fatalf("selected candidates = %d, want default %d", result.SelectedCandidates, defaultTopNPerChannel)
+		}
+	})
+
+	t.Run("explicit override", func(t *testing.T) {
+		_, svc := seed(t)
+		result, err := svc.Scan(context.Background(), ScanOptions{TopNPerChannel: 3})
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if result.SelectedCandidates != 3 {
+			t.Fatalf("selected candidates = %d, want 3", result.SelectedCandidates)
+		}
+	})
+
+	t.Run("zero falls back to default", func(t *testing.T) {
+		_, svc := seed(t)
+		result, err := svc.Scan(context.Background(), ScanOptions{TopNPerChannel: 0})
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if result.SelectedCandidates != defaultTopNPerChannel {
+			t.Fatalf("selected candidates = %d, want default %d", result.SelectedCandidates, defaultTopNPerChannel)
+		}
+	})
+}
+
+func TestScanPrunesUnselectedSafeCandidates(t *testing.T) {
+	db := openDiscoveryTestDB(t)
+	channelSvc := newDiscoveryChannelServiceFake()
+	svc := newDiscoveryTestService(db, channelSvc)
+	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
+	channelSvc.groupsByChannel[source.ID] = []connector.APIKeyGroup{{Name: "plus old", Ratio: 0.1}}
+	if _, err := svc.Scan(context.Background(), ScanOptions{}); err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	first, err := svc.candidates.FindBySource(source.ID, sourceGroupKey(connector.APIKeyGroup{Name: "plus old"}))
+	if err != nil {
+		t.Fatalf("find first candidate: %v", err)
+	}
+	first.Status = statusRejected
+	first.AccountName = "operator value"
+	if err := svc.candidates.Update(first); err != nil {
+		t.Fatalf("set review state: %v", err)
+	}
+
+	channelSvc.groupsByChannel[source.ID] = []connector.APIKeyGroup{{Name: "plus new", Ratio: 0.2}}
+	result, err := svc.Scan(context.Background(), ScanOptions{})
+	if err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if result.SelectedCandidates != 1 {
+		t.Fatalf("selected candidates = %d, want 1", result.SelectedCandidates)
+	}
+	items, err := svc.candidates.List()
+	if err != nil {
+		t.Fatalf("list candidates: %v", err)
+	}
+	if len(items) != 1 || items[0].SourceGroupName != "plus new" {
+		t.Fatalf("queue was not rebuilt: %#v", items)
+	}
+	if _, err := svc.candidates.FindByID(first.ID); err != gorm.ErrRecordNotFound {
+		t.Fatalf("stale candidate survived rebuild: err=%v", err)
+	}
+}
+
+func TestScanOnlyReadsSourceGroups(t *testing.T) {
 	db := openDiscoveryTestDB(t)
 	channelSvc := newDiscoveryChannelServiceFake()
 	svc := newDiscoveryTestService(db, channelSvc)
@@ -542,11 +760,11 @@ func TestScanOnlyReadsSourceGroupsAndPreservesReviewState(t *testing.T) {
 	}}
 	channelSvc.groupsByChannel[disabled.ID] = []connector.APIKeyGroup{{Name: "ignored", Ratio: 1}}
 
-	result, err := svc.Scan(context.Background())
+	result, err := svc.Scan(context.Background(), ScanOptions{})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if result.TotalChannels != 1 || result.ScannedChannels != 1 || result.NewCandidates != 1 || result.UpdatedCandidates != 0 {
+	if result.TotalChannels != 1 || result.ScannedChannels != 1 || result.SelectedCandidates != 1 {
 		t.Fatalf("unexpected scan result: %#v", result)
 	}
 	if channelSvc.groupCallsByChannel[disabled.ID] != 0 {
@@ -560,124 +778,146 @@ func TestScanOnlyReadsSourceGroupsAndPreservesReviewState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find candidate: %v", err)
 	}
-	if candidate.SourceGroupName != "low-cost" || candidate.Status != statusPending || candidate.AccountName != defaultAccountName("low-cost", candidate.ID) {
+	if candidate.SourceGroupName != "low-cost" || candidate.Status != statusPending {
 		t.Fatalf("stored candidate = %#v", candidate)
 	}
-	candidate.Status = statusRejected
-	candidate.AccountName = "operator value"
-	if err := svc.candidates.Update(candidate); err != nil {
-		t.Fatalf("set review state: %v", err)
-	}
-
-	channelSvc.groupsByChannel[source.ID] = []connector.APIKeyGroup{{
-		ID:          &groupID,
-		Name:        "low-cost-renamed",
-		Description: "second scan",
-		Ratio:       0.5,
-	}}
-	result, err = svc.Scan(context.Background())
-	if err != nil {
-		t.Fatalf("second scan: %v", err)
-	}
-	if result.NewCandidates != 0 || result.UpdatedCandidates != 1 {
-		t.Fatalf("unexpected second scan result: %#v", result)
-	}
-	candidate, err = svc.candidates.FindByID(candidate.ID)
-	if err != nil {
-		t.Fatalf("reload candidate: %v", err)
-	}
-	if candidate.SourceGroupName != "low-cost-renamed" || candidate.Ratio != 0.5 {
-		t.Fatalf("source snapshot was not refreshed: %#v", candidate)
-	}
-	if candidate.Status != statusRejected || candidate.AccountName != "operator value" {
-		t.Fatalf("scan overwrote review state: %#v", candidate)
-	}
-	if channelSvc.createCalls != 0 || channelSvc.updateCalls != 0 || channelSvc.revealCalls != 0 {
-		t.Fatalf("second scan performed source key writes: create=%d update=%d reveal=%d", channelSvc.createCalls, channelSvc.updateCalls, channelSvc.revealCalls)
+	if candidate.ChannelType != sub2pool.ChannelOther {
+		t.Fatalf("candidate channel type = %q, want %q", candidate.ChannelType, sub2pool.ChannelOther)
 	}
 }
 
-func TestScanAssignsUniqueBoundedAccountNamesAndMigratesOnlyUntouchedLegacyDefaults(t *testing.T) {
+func TestScanPreservesReviewedAndCustomCandidateState(t *testing.T) {
+	db := openDiscoveryTestDB(t)
+	channelSvc := newDiscoveryChannelServiceFake()
+	svc := newDiscoveryTestService(db, channelSvc)
+	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
+	firstID, secondID := int64(1), int64(2)
+	channelSvc.groupsByChannel[source.ID] = []connector.APIKeyGroup{
+		{ID: &firstID, Name: "plus selected", Ratio: 0.1},
+		{ID: &secondID, Name: "plus reviewed", Ratio: 0.2},
+	}
+	if _, err := svc.Scan(context.Background(), ScanOptions{TopNPerChannel: 2}); err != nil {
+		t.Fatalf("initial scan: %v", err)
+	}
+	selected, err := svc.candidates.FindBySource(source.ID, "id:1")
+	if err != nil {
+		t.Fatalf("find selected candidate: %v", err)
+	}
+	selected.AccountName = "operator-selected-name"
+	if err := svc.candidates.Update(selected); err != nil {
+		t.Fatalf("set custom name: %v", err)
+	}
+	reviewed, err := svc.candidates.FindBySource(source.ID, "id:2")
+	if err != nil {
+		t.Fatalf("find reviewed candidate: %v", err)
+	}
+	reviewed.Status = statusApproved
+	reviewed.AccountName = "operator-reviewed-name"
+	if err := svc.candidates.Update(reviewed); err != nil {
+		t.Fatalf("set reviewed state: %v", err)
+	}
+
+	channelSvc.groupsByChannel[source.ID] = []connector.APIKeyGroup{
+		{ID: &firstID, Name: "plus selected renamed", Ratio: 0.05},
+		{ID: &secondID, Name: "plus reviewed", Ratio: 0.9},
+	}
+	result, err := svc.Scan(context.Background(), ScanOptions{TopNPerChannel: 1})
+	if err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+	if result.SelectedCandidates != 1 || result.DeletedCandidates != 0 {
+		t.Fatalf("rescan result = %#v", result)
+	}
+	selected, _ = svc.candidates.FindByID(selected.ID)
+	if selected.SourceGroupName != "plus selected renamed" || selected.AccountName != "operator-selected-name" {
+		t.Fatalf("selected candidate state = %#v", selected)
+	}
+	reviewed, err = svc.candidates.FindByID(reviewed.ID)
+	if err != nil || reviewed.Status != statusApproved || reviewed.AccountName != "operator-reviewed-name" {
+		t.Fatalf("reviewed candidate state = %#v err=%v", reviewed, err)
+	}
+}
+
+func TestPartialScanDoesNotChangeCandidateQueue(t *testing.T) {
+	db := openDiscoveryTestDB(t)
+	channelSvc := newDiscoveryChannelServiceFake()
+	svc := newDiscoveryTestService(db, channelSvc)
+	working := seedDiscoveryChannel(t, db, "working", storage.ChannelTypeSub2API, true)
+	broken := seedDiscoveryChannel(t, db, "broken", storage.ChannelTypeSub2API, true)
+	channelSvc.groupsByChannel[working.ID] = []connector.APIKeyGroup{{Name: "plus baseline", Ratio: 0.1}}
+	channelSvc.groupsByChannel[broken.ID] = []connector.APIKeyGroup{{Name: "pro baseline", Ratio: 0.2}}
+	if _, err := svc.Scan(context.Background(), ScanOptions{}); err != nil {
+		t.Fatalf("initial scan: %v", err)
+	}
+	before, err := svc.candidates.List()
+	if err != nil {
+		t.Fatalf("list before: %v", err)
+	}
+	channelSvc.groupsByChannel[working.ID] = []connector.APIKeyGroup{{Name: "plus replacement", Ratio: 0.01}}
+	channelSvc.groupErrorsByChannel[broken.ID] = errors.New("source unavailable")
+	result, err := svc.Scan(context.Background(), ScanOptions{})
+	if err != nil {
+		t.Fatalf("partial scan: %v", err)
+	}
+	if len(result.Errors) != 1 {
+		t.Fatalf("partial scan result = %#v", result)
+	}
+	after, err := svc.candidates.List()
+	if err != nil {
+		t.Fatalf("list after: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("candidate count changed: before=%#v after=%#v", before, after)
+	}
+	for i := range before {
+		if before[i].ID != after[i].ID || before[i].SourceGroupName != after[i].SourceGroupName {
+			t.Fatalf("partial scan changed queue: before=%#v after=%#v", before, after)
+		}
+	}
+}
+
+func TestScanCreatesUniqueBoundedDefaultNamesAndSafeChannelLinks(t *testing.T) {
 	db := openDiscoveryTestDB(t)
 	channelSvc := newDiscoveryChannelServiceFake()
 	svc := newDiscoveryTestService(db, channelSvc)
 	first := seedDiscoveryChannel(t, db, "first", storage.ChannelTypeSub2API, true)
 	second := seedDiscoveryChannel(t, db, "second", storage.ChannelTypeSub2API, true)
-	longName := strings.Repeat("分", 120)
-	firstGroupID, secondGroupID := int64(71), int64(72)
-	channelSvc.groupsByChannel[first.ID] = []connector.APIKeyGroup{{ID: &firstGroupID, Name: longName, Ratio: 0.1}}
-	channelSvc.groupsByChannel[second.ID] = []connector.APIKeyGroup{{ID: &secondGroupID, Name: longName, Ratio: 0.2}}
-
-	if _, err := svc.Scan(context.Background()); err != nil {
-		t.Fatalf("initial scan: %v", err)
+	longName := strings.Repeat("分", 120) + " plus"
+	channelSvc.groupsByChannel[first.ID] = []connector.APIKeyGroup{{Name: longName, Ratio: 0.1}}
+	channelSvc.groupsByChannel[second.ID] = []connector.APIKeyGroup{{Name: longName, Ratio: 0.2}}
+	if _, err := svc.Scan(context.Background(), ScanOptions{}); err != nil {
+		t.Fatalf("scan: %v", err)
 	}
-	firstCandidate, err := svc.candidates.FindBySource(first.ID, "id:71")
-	if err != nil {
-		t.Fatalf("find first candidate: %v", err)
+	items, err := svc.candidates.List()
+	if err != nil || len(items) != 2 {
+		t.Fatalf("candidates=%#v err=%v", items, err)
 	}
-	secondCandidate, err := svc.candidates.FindBySource(second.ID, "id:72")
-	if err != nil {
-		t.Fatalf("find second candidate: %v", err)
+	if items[0].AccountName == items[1].AccountName {
+		t.Fatalf("default account names collided: %q", items[0].AccountName)
 	}
-	if firstCandidate.AccountName == secondCandidate.AccountName {
-		t.Fatalf("candidate defaults collided: %q", firstCandidate.AccountName)
+	for _, item := range items {
+		if utf8.RuneCountInString(item.AccountName) > maxTargetAccountNameRunes {
+			t.Fatalf("default account name exceeds limit: %q", item.AccountName)
+		}
 	}
-	if utf8.RuneCountInString(firstCandidate.AccountName) > maxTargetAccountNameRunes || utf8.RuneCountInString(secondCandidate.AccountName) > maxTargetAccountNameRunes {
-		t.Fatalf("candidate defaults exceed target limit: %q / %q", firstCandidate.AccountName, secondCandidate.AccountName)
+	dtos, err := svc.List()
+	if err != nil || len(dtos) != 2 || dtos[0].SourceChannelURL == "" {
+		t.Fatalf("candidate links=%#v err=%v", dtos, err)
 	}
-
-	firstCandidate.AccountName = firstCandidate.SourceGroupName
-	if err := svc.candidates.Update(firstCandidate); err != nil {
-		t.Fatalf("restore legacy default: %v", err)
-	}
-	secondCandidate.AccountName = "operator value"
-	if err := svc.candidates.Update(secondCandidate); err != nil {
-		t.Fatalf("set operator value: %v", err)
-	}
-	staleGroupID := int64(73)
-	staleCandidate := &storage.GroupDiscoveryCandidate{
-		SourceChannelID:      first.ID,
-		SourceChannelName:    first.Name,
-		SourceGroupKey:       "id:73",
-		SourceGroupID:        &staleGroupID,
-		SourceGroupName:      "stale-default",
-		Status:               statusPending,
-		TargetGroupIDsJSON:   "[]",
-		TargetGroupNamesJSON: "[]",
-		Platform:             "openai",
-		AccountName:          "stale-default",
-	}
-	if err := svc.candidates.Create(staleCandidate); err != nil {
-		t.Fatalf("create stale legacy candidate: %v", err)
-	}
-	renamedGroup := "renamed-" + longName
-	channelSvc.groupsByChannel[first.ID] = []connector.APIKeyGroup{{ID: &firstGroupID, Name: renamedGroup, Ratio: 0.1}}
-	if _, err := svc.Scan(context.Background()); err != nil {
-		t.Fatalf("migration scan: %v", err)
-	}
-	firstCandidate, _ = svc.candidates.FindByID(firstCandidate.ID)
-	secondCandidate, _ = svc.candidates.FindByID(secondCandidate.ID)
-	if firstCandidate.AccountName != defaultAccountName(renamedGroup, firstCandidate.ID) {
-		t.Fatalf("legacy default was not migrated: %q", firstCandidate.AccountName)
-	}
-	if secondCandidate.AccountName != "operator value" {
-		t.Fatalf("operator value was overwritten: %q", secondCandidate.AccountName)
-	}
-	staleCandidate, _ = svc.candidates.FindByID(staleCandidate.ID)
-	if staleCandidate.AccountName != defaultAccountName("stale-default", staleCandidate.ID) {
-		t.Fatalf("stale legacy default was not migrated: %q", staleCandidate.AccountName)
+	if got := safeSourceChannelURL("javascript:alert(1)"); got != "" {
+		t.Fatalf("unsafe source channel URL accepted: %q", got)
 	}
 }
 
 func TestDefaultAccountNameMigrationRequiresUntouchedPendingCandidate(t *testing.T) {
 	now := time.Now()
-	uintValue := uint(3)
-	int64Value := int64(7)
+	targetID := uint(3)
+	remoteID := int64(7)
 	tests := map[string]func(*storage.GroupDiscoveryCandidate){
 		"reviewed status":         func(item *storage.GroupDiscoveryCandidate) { item.Status = statusApproved },
-		"selected target":         func(item *storage.GroupDiscoveryCandidate) { item.TargetID = &uintValue },
-		"source key":              func(item *storage.GroupDiscoveryCandidate) { item.SourceAPIKeyID = &int64Value },
-		"target account":          func(item *storage.GroupDiscoveryCandidate) { item.TargetAccountID = &int64Value },
+		"selected target":         func(item *storage.GroupDiscoveryCandidate) { item.TargetID = &targetID },
+		"source key":              func(item *storage.GroupDiscoveryCandidate) { item.SourceAPIKeyID = &remoteID },
+		"target account":          func(item *storage.GroupDiscoveryCandidate) { item.TargetAccountID = &remoteID },
 		"source creation attempt": func(item *storage.GroupDiscoveryCandidate) { item.SourceKeyCreateAttemptedAt = &now },
 		"target creation attempt": func(item *storage.GroupDiscoveryCandidate) { item.TargetAccountCreateAttemptedAt = &now },
 		"apply attempt":           func(item *storage.GroupDiscoveryCandidate) { item.LastAttemptAt = &now },
@@ -699,12 +939,41 @@ func TestDefaultAccountNameMigrationRequiresUntouchedPendingCandidate(t *testing
 	}
 }
 
+func TestScanUpdatesGeneratedDefaultAfterSourceGroupRename(t *testing.T) {
+	db := openDiscoveryTestDB(t)
+	channelSvc := newDiscoveryChannelServiceFake()
+	svc := newDiscoveryTestService(db, channelSvc)
+	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
+	groupID := int64(9)
+	channelSvc.groupsByChannel[source.ID] = []connector.APIKeyGroup{{ID: &groupID, Name: "plus old", Ratio: 0.1}}
+	if _, err := svc.Scan(context.Background(), ScanOptions{}); err != nil {
+		t.Fatalf("initial scan: %v", err)
+	}
+	item, err := svc.candidates.FindBySource(source.ID, "id:9")
+	if err != nil {
+		t.Fatalf("find candidate: %v", err)
+	}
+	if item.AccountName != defaultAccountName("plus old", item.ID) {
+		t.Fatalf("initial default name = %q", item.AccountName)
+	}
+	channelSvc.groupsByChannel[source.ID] = []connector.APIKeyGroup{{ID: &groupID, Name: "plus renamed", Ratio: 0.1}}
+	if _, err := svc.Scan(context.Background(), ScanOptions{}); err != nil {
+		t.Fatalf("rename scan: %v", err)
+	}
+	item, err = svc.candidates.FindByID(item.ID)
+	if err != nil {
+		t.Fatalf("reload candidate: %v", err)
+	}
+	if item.AccountName != defaultAccountName("plus renamed", item.ID) {
+		t.Fatalf("renamed default = %q", item.AccountName)
+	}
+}
 func TestApplyRevalidatesPersistedTargetAccountNameBeforeRemoteWrites(t *testing.T) {
 	db := openDiscoveryTestDB(t)
 	channelSvc := newDiscoveryChannelServiceFake()
 	svc := newDiscoveryTestService(db, channelSvc)
 	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
-	candidate := scanDiscoveryCandidate(t, svc, source, connector.APIKeyGroup{Name: "source-low", Ratio: 0.1})
+	candidate := seedDiscoveredGroup(t, svc, source, connector.APIKeyGroup{Name: "source-low", Ratio: 0.1})
 	server, admin := newDiscoveryAdminServer(t)
 	defer server.Close()
 	target := seedDiscoveryTarget(t, db, server.URL)
@@ -746,7 +1015,7 @@ func TestApproveEnforcesTargetAccountNameLimit(t *testing.T) {
 	channelSvc := newDiscoveryChannelServiceFake()
 	svc := newDiscoveryTestService(db, channelSvc)
 	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
-	candidate := scanDiscoveryCandidate(t, svc, source, connector.APIKeyGroup{Name: "source-low", Ratio: 0.1})
+	candidate := seedDiscoveredGroup(t, svc, source, connector.APIKeyGroup{Name: "source-low", Ratio: 0.1})
 	server, _ := newDiscoveryAdminServer(t)
 	defer server.Close()
 	target := seedDiscoveryTarget(t, db, server.URL)
@@ -767,7 +1036,7 @@ func TestApproveValidatesTargetGroupsBeforeRecordingMapping(t *testing.T) {
 	svc := newDiscoveryTestService(db, channelSvc)
 	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
 	sourceGroupID := int64(9)
-	candidate := scanDiscoveryCandidate(t, svc, source, connector.APIKeyGroup{ID: &sourceGroupID, Name: "source-low", Ratio: 0.06})
+	candidate := seedDiscoveredGroup(t, svc, source, connector.APIKeyGroup{ID: &sourceGroupID, Name: "source-low", Ratio: 0.06})
 	server, admin := newDiscoveryAdminServer(t)
 	defer server.Close()
 	target := seedDiscoveryTarget(t, db, server.URL)
@@ -827,7 +1096,7 @@ func TestApplyCreatesTrackedObjectsAndDoesNotDuplicateThem(t *testing.T) {
 	svc := newDiscoveryTestService(db, channelSvc)
 	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeNewAPI, true)
 	sourceGroupID := int64(12)
-	candidate := scanDiscoveryCandidate(t, svc, source, connector.APIKeyGroup{ID: &sourceGroupID, Name: "source-low", Ratio: 0.06})
+	candidate := seedDiscoveredGroup(t, svc, source, connector.APIKeyGroup{ID: &sourceGroupID, Name: "source-low", Ratio: 0.06})
 	server, admin := newDiscoveryAdminServer(t)
 	defer server.Close()
 	target := seedDiscoveryTarget(t, db, server.URL)
@@ -860,6 +1129,9 @@ func TestApplyCreatesTrackedObjectsAndDoesNotDuplicateThem(t *testing.T) {
 	account := admin.account(*stored.TargetAccountID)
 	if account == nil || account["notes"] != discoveryAccountNotes(candidate.ID) || account["status"] != "active" || account["schedulable"] != true {
 		t.Fatalf("remote account = %#v", account)
+	}
+	if account["name"] != "discovery-source-low" || stored.TargetAccountName != "discovery-source-low" {
+		t.Fatalf("custom Sub2 account name was not preserved: stored=%q remote=%#v", stored.TargetAccountName, account["name"])
 	}
 	credentials, ok := account["credentials"].(map[string]any)
 	if !ok {
@@ -898,7 +1170,7 @@ func TestApplyValidatesCurrentTargetGroupsBeforeCreatingSourceKey(t *testing.T) 
 	svc := newDiscoveryTestService(db, channelSvc)
 	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
 	sourceGroupID := int64(16)
-	candidate := scanDiscoveryCandidate(t, svc, source, connector.APIKeyGroup{ID: &sourceGroupID, Name: "source-low", Ratio: 0.4})
+	candidate := seedDiscoveredGroup(t, svc, source, connector.APIKeyGroup{ID: &sourceGroupID, Name: "source-low", Ratio: 0.4})
 	server, admin := newDiscoveryAdminServer(t)
 	defer server.Close()
 	target := seedDiscoveryTarget(t, db, server.URL)
@@ -925,7 +1197,7 @@ func TestApplyRetriesPartialFailureUsingRecordedRemoteIDs(t *testing.T) {
 	svc := newDiscoveryTestService(db, channelSvc)
 	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
 	sourceGroupID := int64(13)
-	candidate := scanDiscoveryCandidate(t, svc, source, connector.APIKeyGroup{ID: &sourceGroupID, Name: "source-low", Ratio: 0.2})
+	candidate := seedDiscoveredGroup(t, svc, source, connector.APIKeyGroup{ID: &sourceGroupID, Name: "source-low", Ratio: 0.2})
 	server, admin := newDiscoveryAdminServer(t)
 	defer server.Close()
 	admin.failModelSyncCount = 1
@@ -975,7 +1247,7 @@ func TestApplyRefusesToTakeOverManualSourceKey(t *testing.T) {
 	svc := newDiscoveryTestService(db, channelSvc)
 	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
 	sourceGroupID := int64(14)
-	candidate := scanDiscoveryCandidate(t, svc, source, connector.APIKeyGroup{ID: &sourceGroupID, Name: "source-low", Ratio: 1})
+	candidate := seedDiscoveredGroup(t, svc, source, connector.APIKeyGroup{ID: &sourceGroupID, Name: "source-low", Ratio: 1})
 	server, admin := newDiscoveryAdminServer(t)
 	defer server.Close()
 	target := seedDiscoveryTarget(t, db, server.URL)
@@ -1013,7 +1285,7 @@ func TestApplyRefusesToTakeOverManualTargetAccount(t *testing.T) {
 	svc := newDiscoveryTestService(db, channelSvc)
 	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
 	sourceGroupID := int64(15)
-	candidate := scanDiscoveryCandidate(t, svc, source, connector.APIKeyGroup{ID: &sourceGroupID, Name: "source-low", Ratio: 1})
+	candidate := seedDiscoveredGroup(t, svc, source, connector.APIKeyGroup{ID: &sourceGroupID, Name: "source-low", Ratio: 1})
 	server, admin := newDiscoveryAdminServer(t)
 	defer server.Close()
 	target := seedDiscoveryTarget(t, db, server.URL)

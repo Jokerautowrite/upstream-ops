@@ -86,6 +86,13 @@ func TestSub2PoolRoutesExposeOnlySafeSnapshotFields(t *testing.T) {
 		account.MaxConcurrency != 8 {
 		t.Fatalf("safe account dto = %#v", account)
 	}
+
+	cachedReq := httptest.NewRequest(http.MethodGet, "/api/sub2-pool/targets/1/snapshot/cached", nil)
+	cachedRec := httptest.NewRecorder()
+	router.ServeHTTP(cachedRec, cachedReq)
+	if cachedRec.Code != http.StatusOK || service.cachedSnapshotCalls != 1 || service.snapshotCalls != 1 {
+		t.Fatalf("cached status=%d live=%d cached=%d body=%s", cachedRec.Code, service.snapshotCalls, service.cachedSnapshotCalls, cachedRec.Body.String())
+	}
 }
 
 func TestSub2PoolApplyDelegatesSingleSnapshotValidationToService(t *testing.T) {
@@ -110,7 +117,7 @@ func TestSub2PoolApplyDelegatesSingleSnapshotValidationToService(t *testing.T) {
 		t.Fatalf("apply status=%d body=%s", applyRec.Code, applyRec.Body.String())
 	}
 	if service.applyCalls != 1 || service.lastApply.Signature != "preview-signature" ||
-		len(service.lastApply.Proposals) != 0 || service.snapshotCalls != 1 {
+		len(service.lastApply.Proposals) != 0 || service.cachedSnapshotCalls != 1 || service.snapshotCalls != 0 {
 		t.Fatalf("apply input = %#v calls=%d", service.lastApply, service.applyCalls)
 	}
 
@@ -118,7 +125,7 @@ func TestSub2PoolApplyDelegatesSingleSnapshotValidationToService(t *testing.T) {
 	conflictReq.Header.Set("Content-Type", "application/json")
 	conflictRec := httptest.NewRecorder()
 	router.ServeHTTP(conflictRec, conflictReq)
-	if conflictRec.Code != http.StatusConflict || service.applyCalls != 2 || service.snapshotCalls != 1 {
+	if conflictRec.Code != http.StatusConflict || service.applyCalls != 2 || service.snapshotCalls != 0 {
 		t.Fatalf("conflict status=%d calls=%d body=%s", conflictRec.Code, service.applyCalls, conflictRec.Body.String())
 	}
 }
@@ -218,15 +225,16 @@ func (s sub2PoolTargetsStub) List() ([]storage.UpstreamSyncTarget, error) {
 }
 
 type sub2PoolAPIStub struct {
-	snapshot           *sub2pool.Snapshot
-	preview            *sub2pool.PriorityPreview
-	snapshotCalls      int
-	lastApply          sub2pool.ApplyInput
-	applyCalls         int
-	schedulableTarget  uint
-	schedulableAccount int64
-	schedulableValue   bool
-	automation         *sub2pool.AutomationStatus
+	snapshot            *sub2pool.Snapshot
+	preview             *sub2pool.PriorityPreview
+	snapshotCalls       int
+	cachedSnapshotCalls int
+	lastApply           sub2pool.ApplyInput
+	applyCalls          int
+	schedulableTarget   uint
+	schedulableAccount  int64
+	schedulableValue    bool
+	automation          *sub2pool.AutomationStatus
 }
 
 func newSub2PoolAPIStub() *sub2PoolAPIStub {
@@ -289,6 +297,11 @@ func newSub2PoolAPIStub() *sub2PoolAPIStub {
 
 func (s *sub2PoolAPIStub) SnapshotPreview(context.Context, uint) (*sub2pool.Snapshot, *sub2pool.PriorityPreview, error) {
 	s.snapshotCalls++
+	return s.snapshot, s.preview, nil
+}
+
+func (s *sub2PoolAPIStub) CachedSnapshotPreview(context.Context, uint) (*sub2pool.Snapshot, *sub2pool.PriorityPreview, error) {
+	s.cachedSnapshotCalls++
 	return s.snapshot, s.preview, nil
 }
 

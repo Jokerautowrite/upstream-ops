@@ -93,6 +93,7 @@ export function AccountPoolSummaryStrip({
               variant="outline"
               size="sm"
               onClick={onRefresh}
+              disabled={loading || !selectedTargetID}
               className="w-full gap-1.5 sm:w-auto"
             >
               <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
@@ -119,4 +120,3 @@ export function AccountPoolSummaryStrip({
     </section>
   )
 }
-

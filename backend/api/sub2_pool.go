@@ -19,6 +19,7 @@ import (
 // without changing api.go while tests use a small stub.
 type Sub2PoolService interface {
 	SnapshotPreview(ctx context.Context, targetID uint) (*sub2pool.Snapshot, *sub2pool.PriorityPreview, error)
+	CachedSnapshotPreview(ctx context.Context, targetID uint) (*sub2pool.Snapshot, *sub2pool.PriorityPreview, error)
 	Apply(ctx context.Context, targetID uint, input sub2pool.ApplyInput) (*sub2pool.ApplyResult, error)
 	SetSchedulable(ctx context.Context, targetID uint, accountID int64, schedulable bool) (*sub2pool.SchedulableResult, error)
 	GetAutomation(targetID uint) (*sub2pool.AutomationStatus, error)
@@ -38,6 +39,7 @@ func RegisterSub2Pool(g *gin.RouterGroup, service Sub2PoolService, targets sub2P
 	}
 	group := g.Group("/sub2-pool")
 	group.GET("/targets", func(c *gin.Context) { listSub2PoolTargets(c, targets) })
+	group.GET("/targets/:id/snapshot/cached", func(c *gin.Context) { getCachedSub2PoolSnapshot(c, service, targets) })
 	group.GET("/targets/:id/snapshot", func(c *gin.Context) { getSub2PoolSnapshot(c, service, targets) })
 	group.POST("/targets/:id/preview", func(c *gin.Context) { previewSub2PoolPriorities(c, service) })
 	group.POST("/targets/:id/apply", func(c *gin.Context) { applySub2PoolPriorities(c, service) })
@@ -124,6 +126,24 @@ func getSub2PoolSnapshot(c *gin.Context, service Sub2PoolService, targets sub2Po
 		return
 	}
 	snapshot, preview, err := service.SnapshotPreview(c.Request.Context(), targetID)
+	if err != nil {
+		failSub2Pool(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": snapshotDTO(snapshot, preview, targetName(targets, targetID))})
+}
+
+func getCachedSub2PoolSnapshot(c *gin.Context, service Sub2PoolService, targets sub2PoolTargetLister) {
+	targetID, err := uintParam(c, "id")
+	if err != nil {
+		failSub2Pool(c, sub2pool.ErrInvalidInput)
+		return
+	}
+	snapshot, preview, err := service.CachedSnapshotPreview(c.Request.Context(), targetID)
+	if errors.Is(err, sub2pool.ErrSnapshotCacheMissing) {
+		c.JSON(http.StatusOK, gin.H{"data": nil})
+		return
+	}
 	if err != nil {
 		failSub2Pool(c, err)
 		return
@@ -338,7 +358,7 @@ func previewSub2PoolPriorities(c *gin.Context, service Sub2PoolService) {
 		failSub2Pool(c, sub2pool.ErrInvalidInput)
 		return
 	}
-	snapshot, preview, err := service.SnapshotPreview(c.Request.Context(), targetID)
+	snapshot, preview, err := service.CachedSnapshotPreview(c.Request.Context(), targetID)
 	if err != nil {
 		failSub2Pool(c, err)
 		return

@@ -1,4 +1,14 @@
-import { AlertTriangle, CheckCircle2, PauseCircle, ShieldAlert, ShieldCheck, TimerReset } from "lucide-react"
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  CheckCircle2,
+  PauseCircle,
+  ShieldAlert,
+  ShieldCheck,
+  TimerReset,
+} from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
@@ -11,16 +21,18 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import type { Sub2PoolAccount } from "@/lib/api-types"
-import { decimal, formatRatio } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import type { AccountPoolSort } from "./account-pool-filters"
 import {
   accountBalanceLabel,
   accountBalanceTone,
+  accountBalanceValueLabel,
   accountBusinessChannel,
   accountGroupLabel,
   accountHealthLabel,
   accountHealthTone,
   accountMissingLabels,
+  accountMultiplierLabel,
   accountSchedulableLabel,
   formatNumeric,
   isSchedulable,
@@ -30,6 +42,42 @@ interface AccountPoolListProps {
   accounts: Sub2PoolAccount[]
   busyAccountID: number | null
   onToggleSchedulable: (account: Sub2PoolAccount, next: boolean) => void
+}
+
+type SortKey = "name" | "current_priority" | "suggested_priority" | "upstream_multiplier" | "balance"
+
+function SortableHead({
+  label,
+  sortKey,
+  sort,
+  onToggle,
+  className,
+}: {
+  label: string
+  sortKey: SortKey
+  sort: AccountPoolSort
+  onToggle: (sort: AccountPoolSort) => void
+  className?: string
+}) {
+  const active = sort.startsWith(`${sortKey}_`)
+  const descending = active && sort.endsWith("_desc")
+  const Icon = active ? (descending ? ArrowDown : ArrowUp) : ArrowUpDown
+  return (
+    <TableHead className={className}>
+      <button
+        type="button"
+        onClick={() => onToggle(`${sortKey}_${active && !descending ? "desc" : "asc"}` as AccountPoolSort)}
+        aria-label={`按${label}排序`}
+        className={cn(
+          "-mx-2 -my-1 inline-flex items-center gap-1 rounded-md px-2 py-1 text-left font-medium transition-colors hover:text-foreground",
+          active ? "text-foreground" : "text-muted-foreground",
+        )}
+      >
+        {label}
+        <Icon className={cn("size-3", active ? "text-foreground" : "text-muted-foreground/60")} />
+      </button>
+    </TableHead>
+  )
 }
 
 function toneClass(tone: string) {
@@ -146,13 +194,13 @@ function AccountCore({
         <div className="rounded-md border border-border bg-muted/20 px-2 py-1.5">
           <div className="text-[10px] text-muted-foreground">上游倍率</div>
           <div className="mt-0.5 font-semibold tabular-nums">
-            {account.upstream_multiplier == null ? "—" : formatRatio(account.upstream_multiplier)}
+            {accountMultiplierLabel(account)}
           </div>
         </div>
         <div className="rounded-md border border-border bg-muted/20 px-2 py-1.5">
           <div className="text-[10px] text-muted-foreground">余额</div>
           <div className="mt-0.5 font-semibold tabular-nums">
-            {account.balance == null ? "—" : decimal(account.balance, 4)}
+            {accountBalanceValueLabel(account)}
           </div>
         </div>
       </div>
@@ -187,19 +235,55 @@ export function AccountPoolDesktopTable({
   accounts,
   busyAccountID,
   onToggleSchedulable,
-}: AccountPoolListProps) {
+  sort,
+  onSortChange,
+}: AccountPoolListProps & {
+  sort: AccountPoolSort
+  onSortChange: (sort: AccountPoolSort) => void
+}) {
+
   return (
     <div className="hidden overflow-x-auto rounded-lg border border-border bg-card shadow-sm lg:block">
       <Table className="min-w-[1100px]">
         <TableHeader>
           <TableRow>
-            <TableHead className="w-48">账号</TableHead>
+            <SortableHead
+              label="账号"
+              sortKey="name"
+              sort={sort}
+              onToggle={onSortChange}
+              className="w-48"
+            />
             <TableHead className="w-28">平台 / 类型</TableHead>
             <TableHead className="w-40">最低分组 / 渠道</TableHead>
-            <TableHead className="w-24">当前优先级</TableHead>
-            <TableHead className="w-24">建议优先级</TableHead>
-            <TableHead className="w-24">上游倍率</TableHead>
-            <TableHead className="w-24">余额</TableHead>
+            <SortableHead
+              label="当前优先级"
+              sortKey="current_priority"
+              sort={sort}
+              onToggle={onSortChange}
+              className="w-24"
+            />
+            <SortableHead
+              label="建议优先级"
+              sortKey="suggested_priority"
+              sort={sort}
+              onToggle={onSortChange}
+              className="w-24"
+            />
+            <SortableHead
+              label="上游倍率"
+              sortKey="upstream_multiplier"
+              sort={sort}
+              onToggle={onSortChange}
+              className="w-24"
+            />
+            <SortableHead
+              label="余额"
+              sortKey="balance"
+              sort={sort}
+              onToggle={onSortChange}
+              className="w-24"
+            />
             <TableHead className="w-28">健康 / 限流</TableHead>
             <TableHead className="w-28">今日请求 / 并发</TableHead>
             <TableHead className="w-20 text-right">调度</TableHead>
@@ -241,10 +325,10 @@ export function AccountPoolDesktopTable({
                   {formatNumeric(account.suggested_priority)}
                 </TableCell>
                 <TableCell className="font-mono text-[12px] tabular-nums">
-                  {account.upstream_multiplier == null ? "—" : formatRatio(account.upstream_multiplier)}
+                  {accountMultiplierLabel(account)}
                 </TableCell>
                 <TableCell className={cn("font-mono text-[12px] tabular-nums", balanceTone === "debt" && "text-danger", balanceTone === "low" && "text-warning")}>
-                  {account.balance == null ? "—" : decimal(account.balance, 4)}
+                  {accountBalanceValueLabel(account)}
                 </TableCell>
                 <TableCell className="text-[11px]">
                   <div className="flex flex-col gap-1">

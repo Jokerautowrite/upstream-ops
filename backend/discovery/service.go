@@ -7,12 +7,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bejix/upstream-ops/backend/connector"
 	"github.com/bejix/upstream-ops/backend/storage"
+	"github.com/bejix/upstream-ops/backend/sub2pool"
 	"gorm.io/gorm"
 )
 
@@ -25,7 +27,15 @@ const (
 	statusFailed   = "failed"
 
 	maxTargetAccountNameRunes = 100
+	defaultTopNPerChannel     = 5
 )
+
+func resolvedTopNPerChannel(requested int) int {
+	if requested > 0 {
+		return requested
+	}
+	return defaultTopNPerChannel
+}
 
 type channelService interface {
 	ListAPIKeyGroups(ctx context.Context, channelID uint) ([]connector.APIKeyGroup, error)
@@ -39,17 +49,22 @@ type cipher interface {
 	Decrypt(ciphertext string) (string, error)
 }
 
+// classifyChannelFn maps a source group name to its business channel bucket.
+// It is a field so tests can stub it without touching sub2pool wiring.
+type classifyChannelFunc func(groupName string) string
+
 // Service owns discovery candidates and their explicitly-created remote
 // objects. It serializes mutations in-process so a second request cannot race a
 // first request between recording an attempt and receiving its remote response.
 type Service struct {
-	channels     *storage.Channels
-	candidates   *storage.GroupDiscoveryCandidates
-	targets      *storage.UpstreamSyncTargets
-	targetGroups *storage.UpstreamSyncTargetGroups
-	cipher       cipher
-	channelSvc   channelService
-	now          func() time.Time
+	channels        *storage.Channels
+	candidates      *storage.GroupDiscoveryCandidates
+	targets         *storage.UpstreamSyncTargets
+	targetGroups    *storage.UpstreamSyncTargetGroups
+	cipher          cipher
+	channelSvc      channelService
+	now             func() time.Time
+	classifyChannel classifyChannelFunc
 
 	opMu sync.Mutex
 }
@@ -63,13 +78,14 @@ func New(
 	channelSvc channelService,
 ) *Service {
 	return &Service{
-		channels:     channels,
-		candidates:   candidates,
-		targets:      targets,
-		targetGroups: targetGroups,
-		cipher:       cipher,
-		channelSvc:   channelSvc,
-		now:          time.Now,
+		channels:        channels,
+		candidates:      candidates,
+		targets:         targets,
+		targetGroups:    targetGroups,
+		cipher:          cipher,
+		channelSvc:      channelSvc,
+		now:             time.Now,
+		classifyChannel: sub2pool.ClassifyChannel,
 	}
 }
 
@@ -77,10 +93,12 @@ type CandidateDTO struct {
 	ID                     uint       `json:"id"`
 	SourceChannelID        uint       `json:"source_channel_id"`
 	SourceChannelName      string     `json:"source_channel_name"`
+	SourceChannelURL       string     `json:"source_channel_url"`
 	SourceGroupID          *int64     `json:"source_group_id,omitempty"`
 	SourceGroupName        string     `json:"source_group_name"`
 	SourceGroupDescription string     `json:"source_group_description,omitempty"`
 	Ratio                  float64    `json:"ratio"`
+	ChannelType            string     `json:"channel_type"`
 	Status                 string     `json:"status"`
 	TargetID               *uint      `json:"target_id,omitempty"`
 	TargetGroupIDs         []int64    `json:"target_group_ids"`
@@ -101,11 +119,18 @@ type CandidateDTO struct {
 }
 
 type ScanResult struct {
-	TotalChannels     int         `json:"total_channels"`
-	ScannedChannels   int         `json:"scanned_channels"`
-	NewCandidates     int         `json:"new_candidates"`
-	UpdatedCandidates int         `json:"updated_candidates"`
-	Errors            []ScanError `json:"errors,omitempty"`
+	TotalChannels      int         `json:"total_channels"`
+	ScannedChannels    int         `json:"scanned_channels"`
+	TopNPerChannel     int         `json:"top_n_per_channel"`
+	SelectedCandidates int         `json:"selected_candidates"`
+	NewCandidates      int         `json:"new_candidates"`
+	UpdatedCandidates  int         `json:"updated_candidates"`
+	DeletedCandidates  int64       `json:"deleted_candidates"`
+	Errors             []ScanError `json:"errors,omitempty"`
+}
+
+type ScanOptions struct {
+	TopNPerChannel int `json:"top_n_per_channel"`
 }
 
 type ScanError struct {
@@ -136,9 +161,10 @@ type ApplyItemResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// Scan reads monitor-enabled source channels only. It never creates an API key,
-// changes a target group, or touches a target Sub2 account.
-func (s *Service) Scan(ctx context.Context) (*ScanResult, error) {
+// Scan reads monitor-enabled source channels and selects the lowest-ratio
+// groups in each account-pool business channel. It preserves reviewed and
+// remotely tracked rows, and only prunes untouched local candidates.
+func (s *Service) Scan(ctx context.Context, options ScanOptions) (*ScanResult, error) {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 
@@ -146,8 +172,10 @@ func (s *Service) Scan(ctx context.Context) (*ScanResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list monitor-enabled channels: %w", err)
 	}
-	result := &ScanResult{TotalChannels: len(channels)}
+	topN := resolvedTopNPerChannel(options.TopNPerChannel)
+	result := &ScanResult{TotalChannels: len(channels), TopNPerChannel: topN}
 	now := s.now()
+	scanned := make([]storage.GroupDiscoveryCandidate, 0)
 	for _, channel := range channels {
 		groups, err := s.channelSvc.ListAPIKeyGroups(ctx, channel.ID)
 		if err != nil {
@@ -176,7 +204,7 @@ func (s *Service) Scan(ctx context.Context) (*ScanResult, error) {
 				continue
 			}
 			seen[key] = struct{}{}
-			item := &storage.GroupDiscoveryCandidate{
+			scanned = append(scanned, storage.GroupDiscoveryCandidate{
 				SourceChannelID:        channel.ID,
 				SourceChannelName:      channel.Name,
 				SourceGroupKey:         key,
@@ -184,43 +212,60 @@ func (s *Service) Scan(ctx context.Context) (*ScanResult, error) {
 				SourceGroupName:        name,
 				SourceGroupDescription: strings.TrimSpace(group.Description),
 				Ratio:                  group.Ratio,
+				ChannelType:            s.classifyChannel(name),
 				Status:                 statusPending,
 				Platform:               "openai",
 				Concurrency:            10,
 				Weight:                 1,
 				DiscoveredAt:           now,
 				LastSeenAt:             now,
+			})
+		}
+	}
+	kept := filterTopNPerChannel(scanned, topN)
+	result.SelectedCandidates = len(kept)
+
+	// Global per-channel ranking is only valid after every source has been read.
+	// A partial scan reports its errors without changing the existing queue.
+	if len(result.Errors) > 0 {
+		return result, nil
+	}
+
+	keep := make([]storage.GroupDiscoverySourceRef, 0, len(kept))
+	for i := range kept {
+		item := &kept[i]
+		keep = append(keep, storage.GroupDiscoverySourceRef{
+			SourceChannelID: item.SourceChannelID,
+			SourceGroupKey:  item.SourceGroupKey,
+		})
+		setDefaultAccountName := true
+		previous, findErr := s.candidates.FindBySource(item.SourceChannelID, item.SourceGroupKey)
+		if findErr == nil {
+			setDefaultAccountName = shouldSetDefaultAccountName(previous)
+		} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("find discovery candidate: %w", findErr)
+		}
+		stored, created, err := s.candidates.UpsertScanned(item)
+		if err != nil {
+			return nil, fmt.Errorf("upsert discovery candidate: %w", err)
+		}
+		if setDefaultAccountName {
+			stored.AccountName = defaultAccountName(stored.SourceGroupName, stored.ID)
+			if err := s.candidates.Update(stored); err != nil {
+				return nil, fmt.Errorf("set candidate account name: %w", err)
 			}
-			setDefaultAccountName := true
-			previous, findErr := s.candidates.FindBySource(channel.ID, key)
-			if findErr == nil {
-				setDefaultAccountName = shouldSetDefaultAccountName(previous)
-			} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
-				result.Errors = append(result.Errors, ScanError{
-					ChannelID: channel.ID, ChannelName: channel.Name, Error: findErr.Error(),
-				})
-				continue
-			}
-			stored, created, err := s.candidates.UpsertScanned(item)
-			if err != nil {
-				result.Errors = append(result.Errors, ScanError{
-					ChannelID: channel.ID, ChannelName: channel.Name, Error: err.Error(),
-				})
-				continue
-			}
-			if setDefaultAccountName {
-				stored.AccountName = defaultAccountName(stored.SourceGroupName, stored.ID)
-				if err := s.candidates.Update(stored); err != nil {
-					return nil, fmt.Errorf("set candidate account name: %w", err)
-				}
-			}
-			if created {
-				result.NewCandidates++
-				continue
-			}
+		}
+		if created {
+			result.NewCandidates++
+		} else {
 			result.UpdatedCandidates++
 		}
 	}
+	deleted, err := s.candidates.DeleteUnselectedSafe(keep)
+	if err != nil {
+		return nil, fmt.Errorf("prune discovery candidates: %w", err)
+	}
+	result.DeletedCandidates = deleted
 	if err := s.migrateLegacyAccountNames(); err != nil {
 		return nil, err
 	}
@@ -457,14 +502,20 @@ func (s *Service) toDTO(item *storage.GroupDiscoveryCandidate) (CandidateDTO, er
 	if err != nil {
 		return CandidateDTO{}, fmt.Errorf("parse target group names for candidate %d: %w", item.ID, err)
 	}
+	sourceChannelURL := ""
+	if channel, err := s.channels.FindByID(item.SourceChannelID); err == nil {
+		sourceChannelURL = safeSourceChannelURL(channel.SiteURL)
+	}
 	return CandidateDTO{
 		ID:                     item.ID,
 		SourceChannelID:        item.SourceChannelID,
 		SourceChannelName:      item.SourceChannelName,
+		SourceChannelURL:       sourceChannelURL,
 		SourceGroupID:          item.SourceGroupID,
 		SourceGroupName:        item.SourceGroupName,
 		SourceGroupDescription: item.SourceGroupDescription,
 		Ratio:                  item.Ratio,
+		ChannelType:            item.ChannelType,
 		Status:                 item.Status,
 		TargetID:               item.TargetID,
 		TargetGroupIDs:         groupIDs,
@@ -483,4 +534,17 @@ func (s *Service) toDTO(item *storage.GroupDiscoveryCandidate) (CandidateDTO, er
 		DiscoveredAt:           item.DiscoveredAt,
 		LastSeenAt:             item.LastSeenAt,
 	}, nil
+}
+
+func safeSourceChannelURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed == nil {
+		return ""
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if parsed.Host == "" || (scheme != "http" && scheme != "https") {
+		return ""
+	}
+	return raw
 }

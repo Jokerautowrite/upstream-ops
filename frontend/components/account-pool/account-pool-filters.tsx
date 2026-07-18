@@ -19,6 +19,17 @@ export type AccountPoolMissingFilter =
   | "priority"
   | "balance"
   | "health"
+export type AccountPoolSort =
+  | "name_asc"
+  | "name_desc"
+  | "current_priority_asc"
+  | "current_priority_desc"
+  | "suggested_priority_asc"
+  | "suggested_priority_desc"
+  | "upstream_multiplier_asc"
+  | "upstream_multiplier_desc"
+  | "balance_asc"
+  | "balance_desc"
 
 export interface AccountPoolFilterState {
   query: string
@@ -26,6 +37,7 @@ export interface AccountPoolFilterState {
   schedule: AccountPoolScheduleFilter
   health: AccountPoolHealthFilter
   missing: AccountPoolMissingFilter
+  sort: AccountPoolSort
 }
 
 interface AccountPoolFiltersProps {
@@ -61,6 +73,19 @@ const missingOptions: Array<{ value: AccountPoolMissingFilter; label: string }> 
   { value: "health", label: "缺健康状态" },
 ]
 
+const sortOptions: Array<{ value: AccountPoolSort; label: string }> = [
+  { value: "upstream_multiplier_asc", label: "上游倍率：低到高" },
+  { value: "upstream_multiplier_desc", label: "上游倍率：高到低" },
+  { value: "balance_asc", label: "余额：低到高" },
+  { value: "balance_desc", label: "余额：高到低" },
+  { value: "suggested_priority_asc", label: "建议优先级：低到高" },
+  { value: "suggested_priority_desc", label: "建议优先级：高到低" },
+  { value: "current_priority_asc", label: "当前优先级：低到高" },
+  { value: "current_priority_desc", label: "当前优先级：高到低" },
+  { value: "name_asc", label: "账号名称：A-Z" },
+  { value: "name_desc", label: "账号名称：Z-A" },
+]
+
 export function AccountPoolFilters({
   filters,
   businessChannels,
@@ -73,7 +98,8 @@ export function AccountPoolFilters({
     filters.businessChannel !== "all" ||
     filters.schedule !== "all" ||
     filters.health !== "all" ||
-    filters.missing !== "all"
+    filters.missing !== "all" ||
+    filters.sort !== "upstream_multiplier_asc"
 
   function patch(next: Partial<AccountPoolFilterState>) {
     onChange({ ...filters, ...next })
@@ -81,7 +107,7 @@ export function AccountPoolFilters({
 
   return (
     <section className="rounded-lg border border-border bg-card p-3 shadow-sm">
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1.4fr)_repeat(4,minmax(0,1fr))_auto]">
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1.4fr)_repeat(5,minmax(0,1fr))_auto]">
         <div className="relative min-w-0">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -157,6 +183,22 @@ export function AccountPoolFilters({
           </SelectContent>
         </Select>
 
+        <Select
+          value={filters.sort}
+          onValueChange={(value) => patch({ sort: value as AccountPoolSort })}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="排序" />
+          </SelectTrigger>
+          <SelectContent>
+            {sortOptions.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
         <Button
           type="button"
           variant="ghost"
@@ -170,6 +212,7 @@ export function AccountPoolFilters({
               schedule: "all",
               health: "all",
               missing: "all",
+              sort: "upstream_multiplier_asc",
             })
           }
         >
@@ -184,4 +227,3 @@ export function AccountPoolFilters({
     </section>
   )
 }
-

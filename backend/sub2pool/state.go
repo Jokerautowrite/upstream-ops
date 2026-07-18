@@ -94,6 +94,20 @@ type GormPoolLease struct {
 
 func (GormPoolLease) TableName() string { return "sub2_pool_leases" }
 
+// GormPoolSnapshotCache persists the latest successful snapshot per target.
+// It backs the read-only "cached snapshot" page view so opening the account
+// pool page does not hit the upstream admin API.
+type GormPoolSnapshotCache struct {
+	TargetID     uint      `gorm:"primaryKey" json:"target_id"`
+	SnapshotJSON string    `gorm:"type:text;not null" json:"-"`
+	PreviewJSON  string    `gorm:"type:text;not null" json:"-"`
+	GeneratedAt  time.Time `gorm:"not null;index" json:"generated_at"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func (GormPoolSnapshotCache) TableName() string { return "sub2_pool_snapshots" }
+
 type GormStateStore struct {
 	db *gorm.DB
 }
@@ -113,6 +127,7 @@ func (s *GormStateStore) AutoMigrate() error {
 		&GormPoolAutomation{},
 		&GormPoolLease{},
 		&GormPoolAccountRateMapping{},
+		&GormPoolSnapshotCache{},
 	)
 }
 
@@ -515,6 +530,58 @@ func (s *GormStateStore) ListPreparedRuns(targetID uint, limit int) ([]RunRecord
 	return decodeRunRows(rows)
 }
 
+func (s *GormStateStore) LoadCachedSnapshot(targetID uint) (*Snapshot, *PriorityPreview, error) {
+	if targetID == 0 {
+		return nil, nil, errors.New("snapshot cache target id is required")
+	}
+	var row GormPoolSnapshotCache
+	if err := s.db.First(&row, "target_id = ?", targetID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+	var snapshot Snapshot
+	if err := json.Unmarshal([]byte(row.SnapshotJSON), &snapshot); err != nil {
+		return nil, nil, err
+	}
+	var preview PriorityPreview
+	if err := json.Unmarshal([]byte(row.PreviewJSON), &preview); err != nil {
+		return nil, nil, err
+	}
+	snapshot.GeneratedAt = row.GeneratedAt
+	preview.GeneratedAt = row.GeneratedAt
+	return &snapshot, &preview, nil
+}
+
+func (s *GormStateStore) SaveCachedSnapshot(snapshot *Snapshot, preview *PriorityPreview) error {
+	if snapshot == nil || preview == nil || snapshot.TargetID == 0 || preview.TargetID != snapshot.TargetID {
+		return errors.New("snapshot cache target id is required")
+	}
+	snapshotRaw, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	previewRaw, err := json.Marshal(preview)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	row := GormPoolSnapshotCache{
+		TargetID:     snapshot.TargetID,
+		SnapshotJSON: string(snapshotRaw),
+		PreviewJSON:  string(previewRaw),
+		GeneratedAt:  snapshot.GeneratedAt,
+		UpdatedAt:    now,
+	}
+	return s.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "target_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"snapshot_json", "preview_json", "generated_at", "updated_at",
+		}),
+	}).Create(&row).Error
+}
+
 type persistedPriorityProposal struct {
 	AccountID              int64   `json:"account_id"`
 	AccountName            string  `json:"account_name"`
@@ -584,6 +651,12 @@ type MemoryStateStore struct {
 	nextRun    uint
 	eventIDs   map[string]uint
 	leases     map[uint]GormPoolLease
+	snapshots  map[uint]cachedSnapshot
+}
+
+type cachedSnapshot struct {
+	snapshot Snapshot
+	preview  PriorityPreview
 }
 
 func NewMemoryStateStore() *MemoryStateStore {
@@ -594,6 +667,7 @@ func NewMemoryStateStore() *MemoryStateStore {
 		runs:       map[uint]RunRecord{},
 		eventIDs:   map[string]uint{},
 		leases:     map[uint]GormPoolLease{},
+		snapshots:  map[uint]cachedSnapshot{},
 	}
 }
 
@@ -640,6 +714,43 @@ func (s *MemoryStateStore) Save(targetID uint, state TargetState) error {
 	defer s.mu.Unlock()
 	s.items[targetID] = cloneState(state)
 	return nil
+}
+
+func (s *MemoryStateStore) LoadCachedSnapshot(targetID uint) (*Snapshot, *PriorityPreview, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, exists := s.snapshots[targetID]
+	if !exists {
+		return nil, nil, nil
+	}
+	return cloneSnapshot(entry.snapshot), clonePriorityPreview(entry.preview), nil
+}
+
+func (s *MemoryStateStore) SaveCachedSnapshot(snapshot *Snapshot, preview *PriorityPreview) error {
+	if snapshot == nil || preview == nil || snapshot.TargetID == 0 || preview.TargetID != snapshot.TargetID {
+		return errors.New("snapshot cache target id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapshots[snapshot.TargetID] = cachedSnapshot{
+		snapshot: *cloneSnapshot(*snapshot),
+		preview:  *clonePriorityPreview(*preview),
+	}
+	return nil
+}
+
+func cloneSnapshot(snapshot Snapshot) *Snapshot {
+	raw, _ := json.Marshal(snapshot)
+	var out Snapshot
+	_ = json.Unmarshal(raw, &out)
+	return &out
+}
+
+func clonePriorityPreview(preview PriorityPreview) *PriorityPreview {
+	raw, _ := json.Marshal(preview)
+	var out PriorityPreview
+	_ = json.Unmarshal(raw, &out)
+	return &out
 }
 
 func (s *MemoryStateStore) LoadAutomation(targetID uint) (AutomationState, error) {

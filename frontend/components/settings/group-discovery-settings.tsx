@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronUp,
   CircleAlert,
+  ExternalLink,
   ListChecks,
   Play,
   RefreshCw,
@@ -104,6 +105,7 @@ export function GroupDiscoverySettings() {
   );
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
+  const [topNPerChannel, setTopNPerChannel] = useState("5");
   const [busy, setBusy] = useState<string | null>(null);
   const [approvalCandidate, setApprovalCandidate] =
     useState<GroupDiscoveryCandidate | null>(null);
@@ -194,14 +196,18 @@ export function GroupDiscoverySettings() {
   }
 
   async function scan() {
+	const topN = positiveInteger(topNPerChannel, 5);
     setScanning(true);
     try {
       const result = await apiFetch<GroupDiscoveryScanResult>(
         "/upstream-sync/group-discovery/scan",
-        { method: "POST" },
+		{
+			method: "POST",
+			body: JSON.stringify({ top_n_per_channel: topN }),
+		},
       );
       await loadCandidates();
-      const summary = `已扫描 ${result.scanned_channels}/${result.total_channels} 个监控渠道，新增 ${result.new_candidates} 条，更新 ${result.updated_candidates} 条`;
+		const summary = `已扫描 ${result.scanned_channels}/${result.total_channels} 个监控渠道；每类最低 ${result.top_n_per_channel} 条，并列全收；选中 ${result.selected_candidates} 条，新增 ${result.new_candidates} 条，更新 ${result.updated_candidates} 条，移除 ${result.deleted_candidates} 条`;
       if (result.errors?.length) {
         toast.warning(`${summary}，${result.errors.length} 个渠道异常`);
       } else {
@@ -385,7 +391,7 @@ export function GroupDiscoverySettings() {
               ) : null}
             </div>
             <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-              扫描只读取已启用监控的来源渠道并更新本地审核队列。先逐条选择目标与目标分组，只有点击应用才会创建或更新远端对象。
+              扫描只读取已启用监控的来源渠道，按账号池业务类型分别保留最低 N 条（临界倍率并列全收）。先逐条审核，只有点击应用才会创建或更新远端对象。
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -393,7 +399,19 @@ export function GroupDiscoverySettings() {
               <RefreshCw className="size-3.5" />
               刷新队列
             </Button>
-            <Button size="sm" variant="outline" onClick={scan} disabled={scanning}>
+			<div className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2">
+				<Label htmlFor="discovery-top-n" className="whitespace-nowrap text-xs text-muted-foreground">每类最低</Label>
+				<Input
+					id="discovery-top-n"
+					type="number"
+					min="1"
+					max="100"
+					value={topNPerChannel}
+					onChange={(event) => setTopNPerChannel(event.target.value)}
+					className="h-7 w-14 border-0 px-1 text-center shadow-none focus-visible:ring-0"
+				/>
+			</div>
+            <Button size="sm" variant="outline" onClick={() => void scan()} disabled={scanning}>
               <ScanSearch className={cn("size-3.5", scanning && "animate-pulse")} />
               {scanning ? "扫描中" : "扫描来源分组"}
             </Button>
@@ -435,6 +453,9 @@ export function GroupDiscoverySettings() {
                       <Badge variant="outline" className="border-border bg-muted/40 text-muted-foreground">
                         倍率 {formatRatio(candidate.ratio)}
                       </Badge>
+					  <Badge variant="outline" className="border-border bg-background text-muted-foreground">
+						{candidate.channel_type || "Other"}
+					  </Badge>
                     </div>
                     <p className="text-xs text-muted-foreground">
                       来源：{candidate.source_channel_name}
@@ -482,6 +503,18 @@ export function GroupDiscoverySettings() {
                     ) : null}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+                    {candidate.source_channel_url ? (
+                      <Button size="sm" variant="outline" asChild>
+                        <a
+                          href={candidate.source_channel_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <ExternalLink className="size-3.5" />
+                          打开渠道网站
+                        </a>
+                      </Button>
+                    ) : null}
                     <Button
                       size="sm"
                       variant="outline"
@@ -604,12 +637,13 @@ export function GroupDiscoverySettings() {
             </div>
             <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_120px_120px]">
               <div className="space-y-2">
-                <Label>目标账号名称</Label>
+				<Label>加入 Sub2 后的账号名称</Label>
                 <Input
                   value={approvalForm.accountName}
                   maxLength={100}
                   onChange={(event) => setApprovalForm((previous) => ({ ...previous, accountName: event.target.value }))}
                 />
+				<p className="text-xs text-muted-foreground">可修改；应用后 Sub2 将使用此名称，便于和来源渠道一一对应。</p>
               </div>
               <div className="space-y-2">
                 <Label>并发</Label>

@@ -1075,6 +1075,81 @@ func TestAutomationStateAndRecentRunPersistInGormStore(t *testing.T) {
 	}
 }
 
+func TestSnapshotCachePersistsSnapshotAndPreview(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	store := NewGormStateStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	generatedAt := time.Date(2026, 7, 19, 8, 0, 0, 0, time.UTC)
+	snapshot := &Snapshot{
+		TargetID:    7,
+		GeneratedAt: generatedAt,
+		Summary:     SnapshotSummary{AccountCount: 1},
+		Accounts:    []AccountSnapshot{{ID: 11, Name: "cached", CurrentPriority: 30}},
+	}
+	preview := &PriorityPreview{
+		TargetID:    7,
+		GeneratedAt: generatedAt,
+		Signature:   "cached-signature",
+		Proposals:   []PriorityProposal{{AccountID: 11, TargetPriority: 10}},
+	}
+	if err := store.SaveCachedSnapshot(snapshot, preview); err != nil {
+		t.Fatalf("save cache: %v", err)
+	}
+	gotSnapshot, gotPreview, err := store.LoadCachedSnapshot(7)
+	if err != nil {
+		t.Fatalf("load cache: %v", err)
+	}
+	if gotSnapshot == nil || gotPreview == nil ||
+		!gotSnapshot.GeneratedAt.Equal(generatedAt) ||
+		len(gotSnapshot.Accounts) != 1 || gotSnapshot.Accounts[0].Name != "cached" ||
+		gotPreview.Signature != "cached-signature" ||
+		len(gotPreview.Proposals) != 1 || gotPreview.Proposals[0].TargetPriority != 10 {
+		t.Fatalf("cached snapshot=%#v preview=%#v", gotSnapshot, gotPreview)
+	}
+	preview.Signature = "updated-signature"
+	if err := store.SaveCachedSnapshot(snapshot, preview); err != nil {
+		t.Fatalf("update cache: %v", err)
+	}
+	_, gotPreview, err = store.LoadCachedSnapshot(7)
+	if err != nil || gotPreview == nil || gotPreview.Signature != "updated-signature" {
+		t.Fatalf("updated preview=%#v err=%v", gotPreview, err)
+	}
+}
+
+func TestCachedSnapshotPreviewDoesNotReadRemoteAdmin(t *testing.T) {
+	service, admin := newTestService(t, []sub2api.PoolAccount{
+		poolAccount(1, "https://api.example.test/v1", "key-1", 30),
+	}, Config{MinimumAccountCount: 1})
+	if _, _, err := service.CachedSnapshotPreview(context.Background(), 1); !isPublicError(err, ErrSnapshotCacheMissing.Code) {
+		t.Fatalf("missing cache error = %v", err)
+	}
+	if admin.groupListCount != 0 || admin.accountListCount != 0 {
+		t.Fatalf("cache miss read remote admin: groups=%d accounts=%d", admin.groupListCount, admin.accountListCount)
+	}
+	liveSnapshot, livePreview, err := service.SnapshotPreview(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("live snapshot: %v", err)
+	}
+	if admin.groupListCount != 1 || admin.accountListCount != 1 {
+		t.Fatalf("live snapshot calls: groups=%d accounts=%d", admin.groupListCount, admin.accountListCount)
+	}
+	cachedSnapshot, cachedPreview, err := service.CachedSnapshotPreview(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("cached snapshot: %v", err)
+	}
+	if admin.groupListCount != 1 || admin.accountListCount != 1 {
+		t.Fatalf("cached read hit remote admin: groups=%d accounts=%d", admin.groupListCount, admin.accountListCount)
+	}
+	if !cachedSnapshot.GeneratedAt.Equal(liveSnapshot.GeneratedAt) || cachedPreview.Signature != livePreview.Signature {
+		t.Fatalf("cached snapshot=%#v preview=%#v", cachedSnapshot, cachedPreview)
+	}
+}
+
 func TestGormPreparedRunPersistsRecoveryIdentity(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -1426,14 +1501,16 @@ func (f fakeTargets) FindByID(id uint) (*storage.UpstreamSyncTarget, error) {
 }
 
 type fakeAdmin struct {
-	mu          sync.Mutex
-	groups      []sub2api.AdminGroup
-	accounts    map[int64]sub2api.PoolAccount
-	failUpdate  map[int64]bool
-	updateCount int
-	priorityLog []map[int64]int
-	listStarted chan struct{}
-	listRelease chan struct{}
+	mu               sync.Mutex
+	groups           []sub2api.AdminGroup
+	accounts         map[int64]sub2api.PoolAccount
+	failUpdate       map[int64]bool
+	updateCount      int
+	groupListCount   int
+	accountListCount int
+	priorityLog      []map[int64]int
+	listStarted      chan struct{}
+	listRelease      chan struct{}
 }
 
 func (f *fakeAdmin) ListGroups(_ context.Context, _ sub2api.AdminTarget, _ bool) ([]sub2api.AdminGroup, error) {
@@ -1444,12 +1521,16 @@ func (f *fakeAdmin) ListGroups(_ context.Context, _ sub2api.AdminTarget, _ bool)
 		}
 		<-f.listRelease
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.groupListCount++
 	return append([]sub2api.AdminGroup(nil), f.groups...), nil
 }
 
 func (f *fakeAdmin) ListAllPoolAccounts(_ context.Context, _ sub2api.AdminTarget) ([]sub2api.PoolAccount, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.accountListCount++
 	out := make([]sub2api.PoolAccount, 0, len(f.accounts))
 	for _, account := range f.accounts {
 		out = append(out, clonePoolAccount(account))

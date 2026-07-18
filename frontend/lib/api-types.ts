@@ -746,10 +746,12 @@ export interface GroupDiscoveryCandidate {
   id: number
   source_channel_id: number
   source_channel_name: string
+  source_channel_url?: string
   source_group_id?: number | null
   source_group_name: string
   source_group_description?: string
   ratio: number
+  channel_type: string
   status: GroupDiscoveryCandidateStatus
   target_id?: number | null
   target_group_ids: number[]
@@ -778,8 +780,11 @@ export interface GroupDiscoveryScanError {
 export interface GroupDiscoveryScanResult {
   total_channels: number
   scanned_channels: number
+  top_n_per_channel: number
+  selected_candidates: number
   new_candidates: number
   updated_candidates: number
+  deleted_candidates: number
   errors?: GroupDiscoveryScanError[]
 }
 

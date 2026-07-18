@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/bejix/upstream-ops/backend/discovery"
@@ -29,7 +31,12 @@ func listGroupDiscoveryCandidates(c *gin.Context, d *Deps) {
 }
 
 func scanGroupDiscovery(c *gin.Context, d *Deps) {
-	result, err := d.GroupDiscovery.Scan(c.Request.Context())
+	var options discovery.ScanOptions
+	if err := c.ShouldBindJSON(&options); err != nil && !errors.Is(err, io.EOF) {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	result, err := d.GroupDiscovery.Scan(c.Request.Context(), options)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return

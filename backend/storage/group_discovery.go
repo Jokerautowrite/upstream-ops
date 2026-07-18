@@ -13,6 +13,11 @@ import (
 // discovery service after an item has been explicitly approved.
 type GroupDiscoveryCandidates struct{ db *gorm.DB }
 
+type GroupDiscoverySourceRef struct {
+	SourceChannelID uint
+	SourceGroupKey  string
+}
+
 func NewGroupDiscoveryCandidates(db *gorm.DB) *GroupDiscoveryCandidates {
 	return &GroupDiscoveryCandidates{db: db}
 }
@@ -20,6 +25,7 @@ func NewGroupDiscoveryCandidates(db *gorm.DB) *GroupDiscoveryCandidates {
 func (r *GroupDiscoveryCandidates) List() ([]GroupDiscoveryCandidate, error) {
 	var list []GroupDiscoveryCandidate
 	if err := r.db.
+		Order("channel_type ASC").
 		Order("ratio ASC").
 		Order("source_channel_name ASC").
 		Order("source_group_name ASC").
@@ -46,7 +52,55 @@ func (r *GroupDiscoveryCandidates) FindBySource(channelID uint, groupKey string)
 	return &item, nil
 }
 
+// DeleteUnselectedSafe prunes only local, unapplied review rows. Anything
+// approved or carrying a remote creation/apply trace is retained so a scan can
+// never orphan a source key or Sub2 account.
+func (r *GroupDiscoveryCandidates) DeleteUnselectedSafe(keep []GroupDiscoverySourceRef) (int64, error) {
+	selected := make(map[GroupDiscoverySourceRef]struct{}, len(keep))
+	for _, item := range keep {
+		selected[item] = struct{}{}
+	}
+	var deleted int64
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var items []GroupDiscoveryCandidate
+		if err := tx.Find(&items).Error; err != nil {
+			return err
+		}
+		for i := range items {
+			item := &items[i]
+			ref := GroupDiscoverySourceRef{SourceChannelID: item.SourceChannelID, SourceGroupKey: item.SourceGroupKey}
+			if _, exists := selected[ref]; exists || !safeToPruneDiscoveryCandidate(item) {
+				continue
+			}
+			result := tx.Delete(item)
+			if result.Error != nil {
+				return result.Error
+			}
+			deleted += result.RowsAffected
+		}
+		return nil
+	})
+	return deleted, err
+}
+
+func safeToPruneDiscoveryCandidate(item *GroupDiscoveryCandidate) bool {
+	if item == nil || (item.Status != "pending" && item.Status != "rejected") {
+		return false
+	}
+	return item.SourceAPIKeyID == nil &&
+		item.TargetAccountID == nil &&
+		item.SourceKeyCreateAttemptedAt == nil &&
+		item.TargetAccountCreateAttemptedAt == nil &&
+		item.LastAttemptAt == nil &&
+		item.AppliedAt == nil
+}
+
 func (r *GroupDiscoveryCandidates) Create(item *GroupDiscoveryCandidate) error {
+	setCandidateDefaults(item)
+	return r.db.Create(item).Error
+}
+
+func setCandidateDefaults(item *GroupDiscoveryCandidate) {
 	if item.DiscoveredAt.IsZero() {
 		item.DiscoveredAt = time.Now()
 	}
@@ -59,7 +113,6 @@ func (r *GroupDiscoveryCandidates) Create(item *GroupDiscoveryCandidate) error {
 	if item.TargetGroupNamesJSON == "" {
 		item.TargetGroupNamesJSON = "[]"
 	}
-	return r.db.Create(item).Error
 }
 
 func (r *GroupDiscoveryCandidates) Update(item *GroupDiscoveryCandidate) error {
@@ -86,6 +139,7 @@ func (r *GroupDiscoveryCandidates) UpsertScanned(item *GroupDiscoveryCandidate) 
 		"source_group_name":        item.SourceGroupName,
 		"source_group_description": item.SourceGroupDescription,
 		"ratio":                    item.Ratio,
+		"channel_type":             item.ChannelType,
 		"last_seen_at":             item.LastSeenAt,
 	}).Error; err != nil {
 		return nil, false, err

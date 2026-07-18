@@ -9,6 +9,9 @@ UpstreamOps v0.0.6.
   module.
 - Shows the current Sub2 account pool, health, balance, upstream multiplier,
   lowest group, current priority, and suggested priority.
+- Opening the account-pool page reads the last persisted snapshot only. The
+  refresh button performs the explicit live read; the rate-scan scheduler also
+  refreshes the cache after its account-pool cycle.
 - Matches upstream data by the full SHA-256 API-key fingerprint and normalized
   URL. An exact key match is the primary multiplier source.
 - Optionally imports an explicit legacy mapping of `Sub2 account ID + normalized
@@ -39,10 +42,11 @@ UpstreamOps v0.0.6.
   never expose duplicate priorities and can resume safely after a restart.
 - Prepared runs, target state, notifications, and target leases are persisted
   so a process restart does not blindly replay an already completed write.
-- Six additive SQLite/MySQL tables are created on startup:
+- Seven additive SQLite/MySQL tables are created on startup:
   `sub2_pool_target_states`, `sub2_pool_outbox`, `sub2_pool_runs`, and
   `sub2_pool_automation`, plus `sub2_pool_leases` and
-  `sub2_pool_account_rate_mappings`.
+  `sub2_pool_account_rate_mappings`, plus `sub2_pool_snapshots` for the latest
+  safe account-pool snapshot and priority preview.
 - Importing a legacy map writes only `sub2_pool_account_rate_mappings` in the
   local UpstreamOps database. It does not create, edit, schedule, or delete a
   Sub2 account or API key.

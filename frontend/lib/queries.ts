@@ -243,7 +243,8 @@ export function useSub2PoolTargets() {
 
 export function useSub2PoolSnapshot(targetID: string | null) {
   return useApi<Sub2PoolSnapshot>(
-    targetID ? `/sub2-pool/targets/${encodeURIComponent(targetID)}/snapshot` : null,
+    targetID ? `/sub2-pool/targets/${encodeURIComponent(targetID)}/snapshot/cached` : null,
+    false,
   )
 }
 

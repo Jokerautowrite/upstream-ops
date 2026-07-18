@@ -1,4 +1,5 @@
 import type { Sub2PoolAccount } from "@/lib/api-types"
+import { decimal, formatRatio } from "@/lib/format"
 
 export type AccountPoolHealthTone = "healthy" | "limited" | "warning" | "failed" | "unknown"
 export type AccountPoolBalanceTone = "ok" | "low" | "debt" | "unknown"
@@ -33,6 +34,17 @@ export function accountGroupLabel(account: Sub2PoolAccount) {
 export function formatNumeric(value: number | null | undefined, fallback = "—") {
   if (value == null || !Number.isFinite(value)) return fallback
   return value.toLocaleString("zh-CN")
+}
+
+/** 上游倍率显示：nil 显示 —，保留低倍率精度并去掉浮点噪声。 */
+export function accountMultiplierLabel(account: Sub2PoolAccount) {
+  return formatRatio(account.upstream_multiplier)
+}
+
+/** 余额显示：nil 显示 —，保留 2-4 位小数。 */
+export function accountBalanceValueLabel(account: Sub2PoolAccount) {
+  if (account.balance == null) return "—"
+  return decimal(account.balance, 4)
 }
 
 export function isSchedulable(account: Sub2PoolAccount) {
