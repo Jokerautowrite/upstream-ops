@@ -13,6 +13,7 @@ import (
 
 	"github.com/bejix/upstream-ops/backend/connector"
 	"github.com/bejix/upstream-ops/backend/storage"
+	"gorm.io/gorm"
 )
 
 const (
@@ -22,6 +23,8 @@ const (
 	statusApplying = "applying"
 	statusApplied  = "applied"
 	statusFailed   = "failed"
+
+	maxTargetAccountNameRunes = 100
 )
 
 type channelService interface {
@@ -183,11 +186,20 @@ func (s *Service) Scan(ctx context.Context) (*ScanResult, error) {
 				Ratio:                  group.Ratio,
 				Status:                 statusPending,
 				Platform:               "openai",
-				AccountName:            name,
 				Concurrency:            10,
 				Weight:                 1,
 				DiscoveredAt:           now,
 				LastSeenAt:             now,
+			}
+			setDefaultAccountName := true
+			previous, findErr := s.candidates.FindBySource(channel.ID, key)
+			if findErr == nil {
+				setDefaultAccountName = shouldSetDefaultAccountName(previous)
+			} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+				result.Errors = append(result.Errors, ScanError{
+					ChannelID: channel.ID, ChannelName: channel.Name, Error: findErr.Error(),
+				})
+				continue
 			}
 			stored, created, err := s.candidates.UpsertScanned(item)
 			if err != nil {
@@ -196,15 +208,15 @@ func (s *Service) Scan(ctx context.Context) (*ScanResult, error) {
 				})
 				continue
 			}
+			if setDefaultAccountName {
+				stored.AccountName = defaultAccountName(stored.SourceGroupName, stored.ID)
+				if err := s.candidates.Update(stored); err != nil {
+					return nil, fmt.Errorf("set candidate account name: %w", err)
+				}
+			}
 			if created {
 				result.NewCandidates++
 				continue
-			}
-			if strings.TrimSpace(stored.AccountName) == "" && stored.SourceAPIKeyID == nil && stored.TargetAccountID == nil {
-				stored.AccountName = name
-				if err := s.candidates.Update(stored); err != nil {
-					return nil, fmt.Errorf("restore candidate account name: %w", err)
-				}
 			}
 			result.UpdatedCandidates++
 		}
@@ -253,16 +265,17 @@ func (s *Service) Approve(ctx context.Context, id uint, in ApprovalInput) (*Cand
 	}
 	accountName := strings.TrimSpace(in.AccountName)
 	if accountName == "" {
-		accountName = strings.TrimSpace(item.SourceGroupName)
+		accountName = strings.TrimSpace(item.AccountName)
 	}
 	if accountName == "" {
-		return nil, errors.New("account_name is required")
+		accountName = defaultAccountName(item.SourceGroupName, item.ID)
+	}
+	accountName, err = validateTargetAccountName(accountName)
+	if err != nil {
+		return nil, err
 	}
 	if item.TargetAccountID == nil && item.TargetAccountCreateAttemptedAt != nil && item.TargetAccountName != "" && item.TargetAccountName != accountName {
 		return nil, errors.New("target account creation outcome is unresolved; keep the original account name until it is reconciled")
-	}
-	if len(accountName) > 256 {
-		return nil, errors.New("account_name is too long")
 	}
 	platform := strings.ToLower(strings.TrimSpace(in.Platform))
 	if platform == "" {

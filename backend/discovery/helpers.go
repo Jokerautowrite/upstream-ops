@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/bejix/upstream-ops/backend/connector"
 	"github.com/bejix/upstream-ops/backend/connector/sub2api"
@@ -168,6 +169,40 @@ func (s *Service) loadSourceGroup(ctx context.Context, item *storage.GroupDiscov
 
 func discoveryAPIKeyName(candidateID uint) string {
 	return fmt.Sprintf("uo-discovery-key-%d", candidateID)
+}
+
+func defaultAccountName(groupName string, candidateID uint) string {
+	suffix := fmt.Sprintf(" [uo-%d]", candidateID)
+	maxGroupRunes := maxTargetAccountNameRunes - len([]rune(suffix))
+	groupRunes := []rune(strings.TrimSpace(groupName))
+	if len(groupRunes) > maxGroupRunes {
+		groupRunes = groupRunes[:maxGroupRunes]
+	}
+	return strings.TrimSpace(string(groupRunes)) + suffix
+}
+
+func validateTargetAccountName(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("account_name is required")
+	}
+	if utf8.RuneCountInString(value) > maxTargetAccountNameRunes {
+		return "", errors.New("account_name is too long")
+	}
+	return value, nil
+}
+
+// Legacy scans used the source group name directly. Only untouched pending
+// candidates are safe to migrate to the stable, candidate-owned default.
+func shouldSetDefaultAccountName(item *storage.GroupDiscoveryCandidate) bool {
+	if item == nil || item.Status != statusPending || item.TargetID != nil ||
+		item.SourceAPIKeyID != nil || item.TargetAccountID != nil ||
+		item.SourceKeyCreateAttemptedAt != nil || item.TargetAccountCreateAttemptedAt != nil ||
+		item.LastAttemptAt != nil || item.AppliedAt != nil {
+		return false
+	}
+	accountName := strings.TrimSpace(item.AccountName)
+	return accountName == "" || accountName == strings.TrimSpace(item.SourceGroupName)
 }
 
 func discoveryAccountMarker(candidateID uint) string {

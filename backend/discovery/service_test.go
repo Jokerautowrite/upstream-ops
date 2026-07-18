@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"github.com/bejix/upstream-ops/backend/connector"
 	"github.com/bejix/upstream-ops/backend/storage"
@@ -558,7 +560,7 @@ func TestScanOnlyReadsSourceGroupsAndPreservesReviewState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find candidate: %v", err)
 	}
-	if candidate.SourceGroupName != "low-cost" || candidate.Status != statusPending || candidate.AccountName != "low-cost" {
+	if candidate.SourceGroupName != "low-cost" || candidate.Status != statusPending || candidate.AccountName != defaultAccountName("low-cost", candidate.ID) {
 		t.Fatalf("stored candidate = %#v", candidate)
 	}
 	candidate.Status = statusRejected
@@ -592,6 +594,150 @@ func TestScanOnlyReadsSourceGroupsAndPreservesReviewState(t *testing.T) {
 	}
 	if channelSvc.createCalls != 0 || channelSvc.updateCalls != 0 || channelSvc.revealCalls != 0 {
 		t.Fatalf("second scan performed source key writes: create=%d update=%d reveal=%d", channelSvc.createCalls, channelSvc.updateCalls, channelSvc.revealCalls)
+	}
+}
+
+func TestScanAssignsUniqueBoundedAccountNamesAndMigratesOnlyUntouchedLegacyDefaults(t *testing.T) {
+	db := openDiscoveryTestDB(t)
+	channelSvc := newDiscoveryChannelServiceFake()
+	svc := newDiscoveryTestService(db, channelSvc)
+	first := seedDiscoveryChannel(t, db, "first", storage.ChannelTypeSub2API, true)
+	second := seedDiscoveryChannel(t, db, "second", storage.ChannelTypeSub2API, true)
+	longName := strings.Repeat("分", 120)
+	firstGroupID, secondGroupID := int64(71), int64(72)
+	channelSvc.groupsByChannel[first.ID] = []connector.APIKeyGroup{{ID: &firstGroupID, Name: longName, Ratio: 0.1}}
+	channelSvc.groupsByChannel[second.ID] = []connector.APIKeyGroup{{ID: &secondGroupID, Name: longName, Ratio: 0.2}}
+
+	if _, err := svc.Scan(context.Background()); err != nil {
+		t.Fatalf("initial scan: %v", err)
+	}
+	firstCandidate, err := svc.candidates.FindBySource(first.ID, "id:71")
+	if err != nil {
+		t.Fatalf("find first candidate: %v", err)
+	}
+	secondCandidate, err := svc.candidates.FindBySource(second.ID, "id:72")
+	if err != nil {
+		t.Fatalf("find second candidate: %v", err)
+	}
+	if firstCandidate.AccountName == secondCandidate.AccountName {
+		t.Fatalf("candidate defaults collided: %q", firstCandidate.AccountName)
+	}
+	if utf8.RuneCountInString(firstCandidate.AccountName) > maxTargetAccountNameRunes || utf8.RuneCountInString(secondCandidate.AccountName) > maxTargetAccountNameRunes {
+		t.Fatalf("candidate defaults exceed target limit: %q / %q", firstCandidate.AccountName, secondCandidate.AccountName)
+	}
+
+	firstCandidate.AccountName = firstCandidate.SourceGroupName
+	if err := svc.candidates.Update(firstCandidate); err != nil {
+		t.Fatalf("restore legacy default: %v", err)
+	}
+	secondCandidate.AccountName = "operator value"
+	if err := svc.candidates.Update(secondCandidate); err != nil {
+		t.Fatalf("set operator value: %v", err)
+	}
+	renamedGroup := "renamed-" + longName
+	channelSvc.groupsByChannel[first.ID] = []connector.APIKeyGroup{{ID: &firstGroupID, Name: renamedGroup, Ratio: 0.1}}
+	if _, err := svc.Scan(context.Background()); err != nil {
+		t.Fatalf("migration scan: %v", err)
+	}
+	firstCandidate, _ = svc.candidates.FindByID(firstCandidate.ID)
+	secondCandidate, _ = svc.candidates.FindByID(secondCandidate.ID)
+	if firstCandidate.AccountName != defaultAccountName(renamedGroup, firstCandidate.ID) {
+		t.Fatalf("legacy default was not migrated: %q", firstCandidate.AccountName)
+	}
+	if secondCandidate.AccountName != "operator value" {
+		t.Fatalf("operator value was overwritten: %q", secondCandidate.AccountName)
+	}
+}
+
+func TestDefaultAccountNameMigrationRequiresUntouchedPendingCandidate(t *testing.T) {
+	now := time.Now()
+	uintValue := uint(3)
+	int64Value := int64(7)
+	tests := map[string]func(*storage.GroupDiscoveryCandidate){
+		"reviewed status":         func(item *storage.GroupDiscoveryCandidate) { item.Status = statusApproved },
+		"selected target":         func(item *storage.GroupDiscoveryCandidate) { item.TargetID = &uintValue },
+		"source key":              func(item *storage.GroupDiscoveryCandidate) { item.SourceAPIKeyID = &int64Value },
+		"target account":          func(item *storage.GroupDiscoveryCandidate) { item.TargetAccountID = &int64Value },
+		"source creation attempt": func(item *storage.GroupDiscoveryCandidate) { item.SourceKeyCreateAttemptedAt = &now },
+		"target creation attempt": func(item *storage.GroupDiscoveryCandidate) { item.TargetAccountCreateAttemptedAt = &now },
+		"apply attempt":           func(item *storage.GroupDiscoveryCandidate) { item.LastAttemptAt = &now },
+		"applied timestamp":       func(item *storage.GroupDiscoveryCandidate) { item.AppliedAt = &now },
+		"operator name":           func(item *storage.GroupDiscoveryCandidate) { item.AccountName = "operator value" },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			item := &storage.GroupDiscoveryCandidate{
+				Status:          statusPending,
+				SourceGroupName: "legacy-default",
+				AccountName:     "legacy-default",
+			}
+			mutate(item)
+			if shouldSetDefaultAccountName(item) {
+				t.Fatalf("unsafe candidate accepted for migration: %#v", item)
+			}
+		})
+	}
+}
+
+func TestApplyRevalidatesPersistedTargetAccountNameBeforeRemoteWrites(t *testing.T) {
+	db := openDiscoveryTestDB(t)
+	channelSvc := newDiscoveryChannelServiceFake()
+	svc := newDiscoveryTestService(db, channelSvc)
+	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
+	candidate := scanDiscoveryCandidate(t, svc, source, connector.APIKeyGroup{Name: "source-low", Ratio: 0.1})
+	server, admin := newDiscoveryAdminServer(t)
+	defer server.Close()
+	target := seedDiscoveryTarget(t, db, server.URL)
+	approveDiscoveryCandidate(t, svc, candidate, target, "valid-name")
+
+	stored, err := svc.candidates.FindByID(candidate.ID)
+	if err != nil {
+		t.Fatalf("reload approved candidate: %v", err)
+	}
+	stored.AccountName = strings.Repeat("名", maxTargetAccountNameRunes+1)
+	if err := svc.candidates.Update(stored); err != nil {
+		t.Fatalf("persist legacy overlong name: %v", err)
+	}
+	sourceGroupCallsBefore := channelSvc.groupCallsByChannel[source.ID]
+	groupCallsBefore := admin.groupCalls
+	accountListCallsBefore := admin.accountListCalls
+	updateCallsBefore := admin.updateCalls
+	syncModelCallsBefore := admin.syncModelCalls
+	schedulableCallsBefore := len(admin.schedulableCalls)
+	result, err := svc.Apply(context.Background(), []uint{candidate.ID})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if result.Failed != 1 || !strings.Contains(result.Items[0].Error, "too long") {
+		t.Fatalf("overlong apply result = %#v", result)
+	}
+	if channelSvc.groupCallsByChannel[source.ID] != sourceGroupCallsBefore || channelSvc.listKeyCalls != 0 || channelSvc.createCalls != 0 || channelSvc.updateCalls != 0 || channelSvc.revealCalls != 0 ||
+		admin.groupCalls != groupCallsBefore || admin.accountListCalls != accountListCallsBefore || admin.createCalls != 0 || admin.updateCalls != updateCallsBefore ||
+		admin.syncModelCalls != syncModelCallsBefore || len(admin.schedulableCalls) != schedulableCallsBefore {
+		t.Fatalf("overlong name caused remote calls: source_groups=%d keys=%d/%d/%d/%d target_groups=%d accounts=%d/%d/%d models=%d schedulable=%d",
+			channelSvc.groupCallsByChannel[source.ID]-sourceGroupCallsBefore, channelSvc.listKeyCalls, channelSvc.createCalls, channelSvc.updateCalls, channelSvc.revealCalls,
+			admin.groupCalls-groupCallsBefore, admin.accountListCalls-accountListCallsBefore, admin.createCalls, admin.updateCalls-updateCallsBefore,
+			admin.syncModelCalls-syncModelCallsBefore, len(admin.schedulableCalls)-schedulableCallsBefore)
+	}
+}
+
+func TestApproveEnforcesTargetAccountNameLimit(t *testing.T) {
+	db := openDiscoveryTestDB(t)
+	channelSvc := newDiscoveryChannelServiceFake()
+	svc := newDiscoveryTestService(db, channelSvc)
+	source := seedDiscoveryChannel(t, db, "source", storage.ChannelTypeSub2API, true)
+	candidate := scanDiscoveryCandidate(t, svc, source, connector.APIKeyGroup{Name: "source-low", Ratio: 0.1})
+	server, _ := newDiscoveryAdminServer(t)
+	defer server.Close()
+	target := seedDiscoveryTarget(t, db, server.URL)
+
+	_, err := svc.Approve(context.Background(), candidate.ID, ApprovalInput{
+		TargetID:       target.ID,
+		TargetGroupIDs: []int64{101},
+		AccountName:    strings.Repeat("名", maxTargetAccountNameRunes+1),
+	})
+	if err == nil || !strings.Contains(err.Error(), "too long") {
+		t.Fatalf("approve overlong account name error = %v", err)
 	}
 }
 

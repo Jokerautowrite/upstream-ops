@@ -20,6 +20,11 @@ func (s *Service) applyOne(ctx context.Context, item *storage.GroupDiscoveryCand
 	if item.TargetID == nil || *item.TargetID == 0 {
 		return errors.New("target is not configured")
 	}
+	accountName, err := validateTargetAccountName(item.AccountName)
+	if err != nil {
+		return err
+	}
+	item.AccountName = accountName
 	channel, err := s.channels.FindByID(item.SourceChannelID)
 	if err != nil {
 		return fmt.Errorf("load source channel: %w", err)

@@ -607,6 +607,7 @@ export function GroupDiscoverySettings() {
                 <Label>目标账号名称</Label>
                 <Input
                   value={approvalForm.accountName}
+                  maxLength={100}
                   onChange={(event) => setApprovalForm((previous) => ({ ...previous, accountName: event.target.value }))}
                 />
               </div>
