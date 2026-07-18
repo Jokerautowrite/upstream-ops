@@ -1121,6 +1121,38 @@ func TestSnapshotCachePersistsSnapshotAndPreview(t *testing.T) {
 	}
 }
 
+func TestSnapshotCacheMigrationAcceptsExistingProductionSchema(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE sub2_pool_snapshots (
+		target_id INTEGER PRIMARY KEY,
+		snapshot_json TEXT NOT NULL,
+		preview_json TEXT NOT NULL,
+		updated_at datetime
+	)`).Error; err != nil {
+		t.Fatalf("create production cache schema: %v", err)
+	}
+	if err := db.Exec(
+		"INSERT INTO sub2_pool_snapshots (target_id, snapshot_json, preview_json, updated_at) VALUES (?, ?, ?, ?)",
+		1,
+		`{"target_id":1,"accounts":[],"groups":[]}`,
+		`{"target_id":1,"signature":"existing"}`,
+		time.Date(2026, 7, 19, 4, 0, 0, 0, time.UTC),
+	).Error; err != nil {
+		t.Fatalf("insert production cache row: %v", err)
+	}
+	store := NewGormStateStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("migrate existing production cache: %v", err)
+	}
+	snapshot, preview, err := store.LoadCachedSnapshot(1)
+	if err != nil || snapshot == nil || preview == nil || snapshot.GeneratedAt.IsZero() || preview.Signature != "existing" {
+		t.Fatalf("existing cache snapshot=%#v preview=%#v err=%v", snapshot, preview, err)
+	}
+}
+
 func TestCachedSnapshotPreviewDoesNotReadRemoteAdmin(t *testing.T) {
 	service, admin := newTestService(t, []sub2api.PoolAccount{
 		poolAccount(1, "https://api.example.test/v1", "key-1", 30),

@@ -101,8 +101,6 @@ type GormPoolSnapshotCache struct {
 	TargetID     uint      `gorm:"primaryKey" json:"target_id"`
 	SnapshotJSON string    `gorm:"type:text;not null" json:"-"`
 	PreviewJSON  string    `gorm:"type:text;not null" json:"-"`
-	GeneratedAt  time.Time `gorm:"not null;index" json:"generated_at"`
-	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
@@ -549,8 +547,12 @@ func (s *GormStateStore) LoadCachedSnapshot(targetID uint) (*Snapshot, *Priority
 	if err := json.Unmarshal([]byte(row.PreviewJSON), &preview); err != nil {
 		return nil, nil, err
 	}
-	snapshot.GeneratedAt = row.GeneratedAt
-	preview.GeneratedAt = row.GeneratedAt
+	if snapshot.GeneratedAt.IsZero() {
+		snapshot.GeneratedAt = row.UpdatedAt
+	}
+	if preview.GeneratedAt.IsZero() {
+		preview.GeneratedAt = snapshot.GeneratedAt
+	}
 	return &snapshot, &preview, nil
 }
 
@@ -571,13 +573,12 @@ func (s *GormStateStore) SaveCachedSnapshot(snapshot *Snapshot, preview *Priorit
 		TargetID:     snapshot.TargetID,
 		SnapshotJSON: string(snapshotRaw),
 		PreviewJSON:  string(previewRaw),
-		GeneratedAt:  snapshot.GeneratedAt,
 		UpdatedAt:    now,
 	}
 	return s.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "target_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"snapshot_json", "preview_json", "generated_at", "updated_at",
+			"snapshot_json", "preview_json", "updated_at",
 		}),
 	}).Create(&row).Error
 }
