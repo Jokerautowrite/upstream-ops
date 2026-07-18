@@ -221,7 +221,27 @@ func (s *Service) Scan(ctx context.Context) (*ScanResult, error) {
 			result.UpdatedCandidates++
 		}
 	}
+	if err := s.migrateLegacyAccountNames(); err != nil {
+		return nil, err
+	}
 	return result, nil
+}
+
+func (s *Service) migrateLegacyAccountNames() error {
+	items, err := s.candidates.List()
+	if err != nil {
+		return fmt.Errorf("list candidates for account name migration: %w", err)
+	}
+	for i := range items {
+		if !shouldSetDefaultAccountName(&items[i]) {
+			continue
+		}
+		items[i].AccountName = defaultAccountName(items[i].SourceGroupName, items[i].ID)
+		if err := s.candidates.Update(&items[i]); err != nil {
+			return fmt.Errorf("migrate candidate %d account name: %w", items[i].ID, err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) List() ([]CandidateDTO, error) {

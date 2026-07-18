@@ -634,6 +634,22 @@ func TestScanAssignsUniqueBoundedAccountNamesAndMigratesOnlyUntouchedLegacyDefau
 	if err := svc.candidates.Update(secondCandidate); err != nil {
 		t.Fatalf("set operator value: %v", err)
 	}
+	staleGroupID := int64(73)
+	staleCandidate := &storage.GroupDiscoveryCandidate{
+		SourceChannelID:      first.ID,
+		SourceChannelName:    first.Name,
+		SourceGroupKey:       "id:73",
+		SourceGroupID:        &staleGroupID,
+		SourceGroupName:      "stale-default",
+		Status:               statusPending,
+		TargetGroupIDsJSON:   "[]",
+		TargetGroupNamesJSON: "[]",
+		Platform:             "openai",
+		AccountName:          "stale-default",
+	}
+	if err := svc.candidates.Create(staleCandidate); err != nil {
+		t.Fatalf("create stale legacy candidate: %v", err)
+	}
 	renamedGroup := "renamed-" + longName
 	channelSvc.groupsByChannel[first.ID] = []connector.APIKeyGroup{{ID: &firstGroupID, Name: renamedGroup, Ratio: 0.1}}
 	if _, err := svc.Scan(context.Background()); err != nil {
@@ -646,6 +662,10 @@ func TestScanAssignsUniqueBoundedAccountNamesAndMigratesOnlyUntouchedLegacyDefau
 	}
 	if secondCandidate.AccountName != "operator value" {
 		t.Fatalf("operator value was overwritten: %q", secondCandidate.AccountName)
+	}
+	staleCandidate, _ = svc.candidates.FindByID(staleCandidate.ID)
+	if staleCandidate.AccountName != defaultAccountName("stale-default", staleCandidate.ID) {
+		t.Fatalf("stale legacy default was not migrated: %q", staleCandidate.AccountName)
 	}
 }
 
