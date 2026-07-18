@@ -733,3 +733,65 @@ export interface UpstreamSyncLogPage {
   page_size: number
   pages: number
 }
+
+export type GroupDiscoveryCandidateStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "applying"
+  | "applied"
+  | "failed"
+
+export interface GroupDiscoveryCandidate {
+  id: number
+  source_channel_id: number
+  source_channel_name: string
+  source_group_id?: number | null
+  source_group_name: string
+  source_group_description?: string
+  ratio: number
+  status: GroupDiscoveryCandidateStatus
+  target_id?: number | null
+  target_group_ids: number[]
+  target_group_names: string[]
+  platform: string
+  account_name: string
+  concurrency: number
+  weight: number
+  source_api_key_id?: number | null
+  source_api_key_name?: string
+  target_account_id?: number | null
+  target_account_name?: string
+  apply_error?: string
+  last_attempt_at?: string | null
+  applied_at?: string | null
+  discovered_at: string
+  last_seen_at: string
+}
+
+export interface GroupDiscoveryScanError {
+  channel_id: number
+  channel_name: string
+  error: string
+}
+
+export interface GroupDiscoveryScanResult {
+  total_channels: number
+  scanned_channels: number
+  new_candidates: number
+  updated_candidates: number
+  errors?: GroupDiscoveryScanError[]
+}
+
+export interface GroupDiscoveryApplyItemResult {
+  id: number
+  status: GroupDiscoveryCandidateStatus
+  error?: string
+}
+
+export interface GroupDiscoveryApplyResult {
+  requested: number
+  applied: number
+  failed: number
+  items: GroupDiscoveryApplyItemResult[]
+}

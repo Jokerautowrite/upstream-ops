@@ -397,6 +397,53 @@ type UpstreamSyncManagedAccount struct {
 
 func (UpstreamSyncManagedAccount) TableName() string { return "upstream_sync_managed_accounts" }
 
+// GroupDiscoveryCandidate 是从监控渠道读取到的上游 API Key 分组。
+//
+// 扫描只更新来源快照；目标站、目标分组和账号名称由人工审核后写入。远端
+// API Key / Sub2 账号的 ID 会在每个远端写入成功后立即保存，重试时据此
+// 复用已创建的对象，避免重复创建。
+type GroupDiscoveryCandidate struct {
+	ID uint `gorm:"primaryKey" json:"id"`
+
+	SourceChannelID   uint   `gorm:"not null;uniqueIndex:idx_group_discovery_source_group" json:"source_channel_id"`
+	SourceChannelName string `gorm:"size:128;not null" json:"source_channel_name"`
+	// SourceGroupKey is "id:<id>" when the upstream exposes an ID and
+	// "name:<normalized name>" otherwise. The latter is required by NewAPI
+	// installations which expose group names but no stable remote ID.
+	SourceGroupKey         string  `gorm:"size:512;not null;uniqueIndex:idx_group_discovery_source_group" json:"source_group_key"`
+	SourceGroupID          *int64  `json:"source_group_id,omitempty"`
+	SourceGroupName        string  `gorm:"size:256;not null" json:"source_group_name"`
+	SourceGroupDescription string  `gorm:"type:text" json:"source_group_description,omitempty"`
+	Ratio                  float64 `gorm:"not null" json:"ratio"`
+
+	Status string `gorm:"size:32;not null;default:'pending';index" json:"status"`
+
+	TargetID             *uint  `gorm:"index" json:"target_id,omitempty"`
+	TargetGroupIDsJSON   string `gorm:"type:text;not null;default:'[]'" json:"-"`
+	TargetGroupNamesJSON string `gorm:"type:text;not null;default:'[]'" json:"-"`
+	Platform             string `gorm:"size:64;not null;default:'openai'" json:"platform"`
+	AccountName          string `gorm:"size:256;not null;default:''" json:"account_name"`
+	Concurrency          int    `gorm:"not null;default:10" json:"concurrency"`
+	Weight               int    `gorm:"not null;default:1" json:"weight"`
+
+	SourceAPIKeyID                 *int64     `json:"source_api_key_id,omitempty"`
+	SourceAPIKeyName               string     `gorm:"size:256;not null;default:''" json:"source_api_key_name"`
+	SourceKeyCreateAttemptedAt     *time.Time `json:"source_key_create_attempted_at,omitempty"`
+	TargetAccountID                *int64     `json:"target_account_id,omitempty"`
+	TargetAccountName              string     `gorm:"size:256;not null;default:''" json:"target_account_name"`
+	TargetAccountCreateAttemptedAt *time.Time `json:"target_account_create_attempted_at,omitempty"`
+
+	ApplyError    string     `gorm:"type:text" json:"apply_error,omitempty"`
+	LastAttemptAt *time.Time `json:"last_attempt_at,omitempty"`
+	AppliedAt     *time.Time `json:"applied_at,omitempty"`
+	DiscoveredAt  time.Time  `gorm:"not null;index" json:"discovered_at"`
+	LastSeenAt    time.Time  `gorm:"not null;index" json:"last_seen_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+func (GroupDiscoveryCandidate) TableName() string { return "group_discovery_candidates" }
+
 // UpstreamSyncLog 记录同步分组的执行结果。
 type UpstreamSyncLog struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`

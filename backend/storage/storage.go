@@ -136,6 +136,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&UpstreamSyncGroup{},
 		&UpstreamSyncAccount{},
 		&UpstreamSyncManagedAccount{},
+		&GroupDiscoveryCandidate{},
 		&UpstreamSyncLog{},
 	)
 }

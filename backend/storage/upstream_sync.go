@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -49,6 +50,15 @@ func (r *UpstreamSyncTargets) Create(item *UpstreamSyncTarget) error { return r.
 func (r *UpstreamSyncTargets) Update(item *UpstreamSyncTarget) error { return r.db.Save(item).Error }
 func (r *UpstreamSyncTargets) Delete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		var remoteObjects int64
+		if err := tx.Model(&GroupDiscoveryCandidate{}).
+			Where("target_id = ? AND (target_account_id IS NOT NULL OR target_account_create_attempted_at IS NOT NULL)", id).
+			Count(&remoteObjects).Error; err != nil {
+			return err
+		}
+		if remoteObjects > 0 {
+			return fmt.Errorf("cannot delete target: %d group discovery candidate(s) may have remote accounts; resolve them first", remoteObjects)
+		}
 		var syncGroupIDs []uint
 		if err := tx.Model(&UpstreamSyncGroup{}).Where("target_id = ?", id).Pluck("id", &syncGroupIDs).Error; err != nil {
 			return err

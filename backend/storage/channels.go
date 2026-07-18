@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"gorm.io/gorm"
@@ -16,6 +17,15 @@ func (r *Channels) Create(c *Channel) error { return r.db.Create(c).Error }
 func (r *Channels) Update(c *Channel) error { return r.db.Save(c).Error }
 func (r *Channels) Delete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		var remoteObjects int64
+		if err := tx.Model(&GroupDiscoveryCandidate{}).
+			Where("source_channel_id = ? AND (source_api_key_id IS NOT NULL OR target_account_id IS NOT NULL OR source_key_create_attempted_at IS NOT NULL OR target_account_create_attempted_at IS NOT NULL)", id).
+			Count(&remoteObjects).Error; err != nil {
+			return err
+		}
+		if remoteObjects > 0 {
+			return fmt.Errorf("cannot delete channel: %d group discovery candidate(s) may have remote objects; resolve them first", remoteObjects)
+		}
 		var channel Channel
 		if err := tx.Select("id", "name").First(&channel, id).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
@@ -35,6 +45,9 @@ func (r *Channels) Delete(id uint) error {
 			if err := tx.Where("channel_id = ?", id).Delete(model).Error; err != nil {
 				return err
 			}
+		}
+		if err := tx.Where("source_channel_id = ?", id).Delete(&GroupDiscoveryCandidate{}).Error; err != nil {
+			return err
 		}
 		if err := tx.Where("upstream_channel_id = ?", id).Delete(&NotificationLog{}).Error; err != nil {
 			return err

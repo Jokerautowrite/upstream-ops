@@ -901,6 +901,141 @@ func TestDeleteChannelCleansScopedState(t *testing.T) {
 	}
 }
 
+func TestDeleteChannelPreservesDiscoverySafety(t *testing.T) {
+	db := openTestDB(t)
+	channels := NewChannels(db)
+	channel := &Channel{
+		Name:           "discovery-source",
+		Type:           ChannelTypeSub2API,
+		SiteURL:        "https://example.com",
+		Username:       "u",
+		PasswordCipher: "x",
+		MonitorEnabled: true,
+	}
+	if err := channels.Create(channel); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	pending := &GroupDiscoveryCandidate{
+		SourceChannelID:      channel.ID,
+		SourceChannelName:    channel.Name,
+		SourceGroupKey:       "name:pending",
+		SourceGroupName:      "pending",
+		Status:               "pending",
+		TargetGroupIDsJSON:   "[]",
+		TargetGroupNamesJSON: "[]",
+		Platform:             "openai",
+		DiscoveredAt:         time.Now(),
+		LastSeenAt:           time.Now(),
+	}
+	if err := db.Create(pending).Error; err != nil {
+		t.Fatalf("create pending candidate: %v", err)
+	}
+	if err := channels.Delete(channel.ID); err != nil {
+		t.Fatalf("delete channel with local candidate: %v", err)
+	}
+	var pendingCount int64
+	if err := db.Model(&GroupDiscoveryCandidate{}).Where("id = ?", pending.ID).Count(&pendingCount).Error; err != nil {
+		t.Fatalf("count pending candidate: %v", err)
+	}
+	if pendingCount != 0 {
+		t.Fatalf("pending candidate count = %d, want 0", pendingCount)
+	}
+
+	channel = &Channel{
+		Name:           "discovery-source-remote",
+		Type:           ChannelTypeSub2API,
+		SiteURL:        "https://example.com",
+		Username:       "u",
+		PasswordCipher: "x",
+		MonitorEnabled: true,
+	}
+	if err := channels.Create(channel); err != nil {
+		t.Fatalf("create remote channel: %v", err)
+	}
+	keyID := int64(1)
+	remote := &GroupDiscoveryCandidate{
+		SourceChannelID:      channel.ID,
+		SourceChannelName:    channel.Name,
+		SourceGroupKey:       "name:remote",
+		SourceGroupName:      "remote",
+		Status:               "failed",
+		TargetGroupIDsJSON:   "[]",
+		TargetGroupNamesJSON: "[]",
+		Platform:             "openai",
+		SourceAPIKeyID:       &keyID,
+		DiscoveredAt:         time.Now(),
+		LastSeenAt:           time.Now(),
+	}
+	if err := db.Create(remote).Error; err != nil {
+		t.Fatalf("create remote candidate: %v", err)
+	}
+	if err := channels.Delete(channel.ID); err == nil {
+		t.Fatal("delete channel with remote discovery object succeeded")
+	}
+	var channelCount int64
+	if err := db.Model(&Channel{}).Where("id = ?", channel.ID).Count(&channelCount).Error; err != nil {
+		t.Fatalf("count blocked channel: %v", err)
+	}
+	if channelCount != 1 {
+		t.Fatalf("blocked channel count = %d, want 1", channelCount)
+	}
+}
+
+func TestDeleteTargetPreservesDiscoverySafety(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewUpstreamSyncTargets(db)
+	target := &UpstreamSyncTarget{
+		Name:              "discovery-target",
+		BaseURL:           "https://target.example.com",
+		AdminAPIKeyCipher: "x",
+		Enabled:           true,
+	}
+	if err := targets.Create(target); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if err := targets.Delete(target.ID); err != nil {
+		t.Fatalf("delete unused target: %v", err)
+	}
+
+	target = &UpstreamSyncTarget{
+		Name:              "discovery-target-remote",
+		BaseURL:           "https://target.example.com",
+		AdminAPIKeyCipher: "x",
+		Enabled:           true,
+	}
+	if err := targets.Create(target); err != nil {
+		t.Fatalf("create target with remote candidate: %v", err)
+	}
+	accountID := int64(9)
+	if err := db.Create(&GroupDiscoveryCandidate{
+		SourceChannelID:      1,
+		SourceChannelName:    "source",
+		SourceGroupKey:       "name:remote-target",
+		SourceGroupName:      "remote-target",
+		Status:               "applied",
+		TargetID:             &target.ID,
+		TargetGroupIDsJSON:   "[]",
+		TargetGroupNamesJSON: "[]",
+		Platform:             "openai",
+		TargetAccountID:      &accountID,
+		DiscoveredAt:         time.Now(),
+		LastSeenAt:           time.Now(),
+	}).Error; err != nil {
+		t.Fatalf("create remote target candidate: %v", err)
+	}
+	if err := targets.Delete(target.ID); err == nil {
+		t.Fatal("delete target with remote discovery account succeeded")
+	}
+	var targetCount int64
+	if err := db.Model(&UpstreamSyncTarget{}).Where("id = ?", target.ID).Count(&targetCount).Error; err != nil {
+		t.Fatalf("count blocked target: %v", err)
+	}
+	if targetCount != 1 {
+		t.Fatalf("blocked target count = %d, want 1", targetCount)
+	}
+}
+
 func TestAutoMigrateDropsDeletedAtColumns(t *testing.T) {
 	db := openTestDB(t)
 

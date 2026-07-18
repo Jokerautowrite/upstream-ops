@@ -70,6 +70,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { GroupDiscoverySettings } from "@/components/settings/group-discovery-settings";
 import { apiFetch } from "@/lib/api";
 import { formatRatio, relativeTime } from "@/lib/format";
 import { useChannels } from "@/lib/queries";
@@ -896,6 +897,7 @@ export function UpstreamSyncSettings() {
 
   return (
     <div className="space-y-5">
+      <GroupDiscoverySettings />
       <Panel
         title="Sub2API 上游列表"
         description="主列表只展示可写入的 Sub2API 上游；点击分组管理后在对应卡片内维护同步分组。"

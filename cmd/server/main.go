@@ -18,6 +18,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/config"
 	"github.com/bejix/upstream-ops/backend/connector/sub2api"
 	"github.com/bejix/upstream-ops/backend/crypto"
+	"github.com/bejix/upstream-ops/backend/discovery"
 	"github.com/bejix/upstream-ops/backend/logger"
 	"github.com/bejix/upstream-ops/backend/monitor"
 	"github.com/bejix/upstream-ops/backend/notify"
@@ -107,6 +108,7 @@ func main() {
 	upstreamSyncAccounts := storage.NewUpstreamSyncAccounts(db)
 	managedSyncAccounts := storage.NewUpstreamSyncManagedAccounts(db)
 	syncLogs := storage.NewUpstreamSyncLogs(db)
+	discoveryCandidates := storage.NewGroupDiscoveryCandidates(db)
 
 	channelSvc := channel.NewService(channels, authSessions, captchas, rates, monLogs, cipher)
 	channelSvc.UpdateProxyConfig(cfg.Proxy)
@@ -160,6 +162,7 @@ func main() {
 	poolSvc.SetAccountRateMappingStore(poolState, rates)
 	poolSvc.SetDispatcher(sub2pool.NewNotifyAdapter(dispatcher))
 	poolRunner := sub2pool.NewRunner(syncTargets, poolSvc, log)
+	discoverySvc := discovery.New(channels, discoveryCandidates, syncTargets, syncGroups, cipher, channelSvc)
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
 		scheduled := scheduler.New(scfg, monitorSvc, monLogs, syncLogs, rates, notifies, announcements, captchas, cipher, syncSvc, pcfg, log)
@@ -204,22 +207,23 @@ func main() {
 	}
 
 	api.Register(router, &api.Deps{
-		DB:            db,
-		Cipher:        cipher,
-		Runtime:       runtimeMgr,
-		Channels:      channels,
-		Sessions:      authSessions,
-		Captchas:      captchas,
-		Notifies:      notifies,
-		Announcements: announcements,
-		Rates:         rates,
-		MonLogs:       monLogs,
-		ChannelSvc:    channelSvc,
-		Monitor:       monitorSvc,
-		Dispatcher:    dispatcher,
-		UpstreamSync:  syncSvc,
-		Log:           log,
-		Frontend:      frontendFS,
+		DB:             db,
+		Cipher:         cipher,
+		Runtime:        runtimeMgr,
+		Channels:       channels,
+		Sessions:       authSessions,
+		Captchas:       captchas,
+		Notifies:       notifies,
+		Announcements:  announcements,
+		Rates:          rates,
+		MonLogs:        monLogs,
+		ChannelSvc:     channelSvc,
+		Monitor:        monitorSvc,
+		Dispatcher:     dispatcher,
+		UpstreamSync:   syncSvc,
+		GroupDiscovery: discoverySvc,
+		Log:            log,
+		Frontend:       frontendFS,
 	})
 	poolAPI := router.Group("/api")
 	poolAPI.Use(runtimeMgr.RequiredAuthMiddleware())
