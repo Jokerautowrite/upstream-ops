@@ -18,6 +18,8 @@
 *.test
 *.out
 coverage.txt
+__pycache__/
+*.py[cod]
 
 # IDE
 .idea/

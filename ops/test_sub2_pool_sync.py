@@ -27,7 +27,7 @@ class Sub2PoolSyncTests(unittest.TestCase):
             else:
                 os.environ[key] = value
 
-    def test_candidates_use_pool_mode_and_skip_image_only_sites(self):
+    def test_candidates_use_pool_mode_and_report_image_only_sites(self):
         rows = [
             [
                 "1",
@@ -86,12 +86,21 @@ class Sub2PoolSyncTests(unittest.TestCase):
         ]
         sync.sh = lambda _cmd, _input: "\n".join("\t".join(row) for row in rows)
 
-        candidates, image_only_skipped = sync.fetch_sub2_candidates()
+        candidates, image_only_candidates = sync.fetch_sub2_candidates()
 
-        self.assertEqual(image_only_skipped, 1)
-        self.assertEqual({item["site"] for item in candidates}, {"https://text.example", "https://mixed.example"})
+        self.assertEqual(image_only_candidates, 1)
+        self.assertEqual(
+            {item["site"] for item in candidates},
+            {"https://image.example", "https://text.example", "https://mixed.example"},
+        )
         mixed = next(item for item in candidates if item["site"] == "https://mixed.example")
-        self.assertEqual(mixed["source_name"], "PLUS mixed")
+        self.assertEqual(mixed["source_name"], "Image worker / PLUS mixed")
+
+    def test_notification_events_match_priority_workflow(self):
+        self.assertNotIn("sub2_pool_changed", sync.DEFAULT_EVENTS)
+        self.assertIn("login_failed", sync.DEFAULT_EVENTS)
+        self.assertIn("sub2_pool_priority_applied", sync.DEFAULT_EVENTS)
+        self.assertIn("sub2_pool_priority_failed", sync.DEFAULT_EVENTS)
 
     def test_new_channel_name_is_based_only_on_url(self):
         item = {

@@ -11,6 +11,10 @@ from urllib.request import Request, build_opener, ProxyHandler
 from urllib.error import HTTPError
 
 UPSTREAM_BASE = os.environ.get("UPSTREAM_OPS_BASE", "http://127.0.0.1:6818").rstrip("/")
+NOTIFY_GUARD_URL = os.environ.get(
+    "UPSTREAM_NOTIFY_GUARD_URL",
+    "http://127.0.0.1:18765/notify",
+).strip()
 SYNC_USERNAME_ENV = "UPSTREAM_OPS_SYNC_USERNAME"
 SYNC_PASSWORD_ENV = "UPSTREAM_OPS_SYNC_PASSWORD"
 CONFIG_PATH = "/opt/upstream-ops/data/config.yaml"
@@ -29,7 +33,9 @@ DEFAULT_EVENTS = [
     "rate_added",
     "rate_removed",
     "monitor_failed",
-    "sub2_pool_changed",
+    "login_failed",
+    "sub2_pool_priority_applied",
+    "sub2_pool_priority_failed",
 ]
 
 def configure_logging():
@@ -200,19 +206,18 @@ copy (
                 "source_names": [],
                 "site": site,
             }
-        if is_image_only(name):
-            continue
         by_site[key]["source_names"].append(name)
 
     candidates = []
-    image_only_skipped = 0
+    image_only_candidates = 0
     for item in by_site.values():
         if not item["source_names"]:
-            image_only_skipped += 1
             continue
+        if all(is_image_only(name) for name in item["source_names"]):
+            image_only_candidates += 1
         item["source_name"] = " / ".join(item["source_names"])
         candidates.append(item)
-    return candidates, image_only_skipped
+    return candidates, image_only_candidates
 
 
 def upstream_token():
@@ -318,10 +323,14 @@ def ensure_notification_subscription(token):
     channels = list_upstream_channels(token)
     channel_ids = [c["id"] for c in channels if c.get("monitor_enabled")]
     subs = json.dumps([{"channel_ids": channel_ids, "mode": "all", "events": DEFAULT_EVENTS}], ensure_ascii=False)
-    feishu_channels = [item for item in list_notification_channels(token) if item.get("type") == "feishu"]
-    if not feishu_channels:
-        raise RuntimeError("no Feishu notification channel is configured")
-    for channel in feishu_channels:
+    managed_channels = [
+        item
+        for item in list_notification_channels(token)
+        if item.get("type") in ("feishu", "webhook") and item.get("enabled", True)
+    ]
+    if not managed_channels:
+        raise RuntimeError("no enabled notification channel is configured")
+    for channel in managed_channels:
         payload = {
             "name": channel.get("name", ""),
             "type": channel.get("type", "feishu"),
@@ -337,12 +346,63 @@ def ensure_notification_subscription(token):
             timeout=15,
         )
         if status != 200:
-            raise RuntimeError(f"update Feishu notification subscription failed: {status} {raw[:180] or obj}")
+            raise RuntimeError(f"update notification subscription failed: {status} {raw[:180] or obj}")
     return len(channel_ids)
 
 
-def main():
-    configure_logging()
+def notify_import_result(result, ok=True):
+    if not NOTIFY_GUARD_URL:
+        return
+    if ok:
+        added = result.get("added") or []
+        enabled = result.get("enabled") or []
+        skipped = result.get("skipped") or []
+        lines = [
+            f"候选 URL：{result.get('candidates', 0)}",
+            f"新增渠道：{len(added)}",
+            f"恢复监控：{len(enabled)}",
+            f"跳过：{len(skipped)}",
+            f"纯生图 URL 候选：{result.get('image_only_candidates', 0)}",
+            f"当前订阅渠道：{result.get('subscribed_channels', 0)}",
+        ]
+        for item in added[:10]:
+            lines.append(f"- 新增 #{item.get('id')} {item.get('site')}")
+        for item in enabled[:10]:
+            lines.append(f"- 恢复 #{item.get('id')} {item.get('site')}")
+        for item in skipped[:10]:
+            lines.append(f"- 跳过 {item.get('site')}：{item.get('reason')}")
+        payload = {
+            "event": "sub2_import_summary",
+            "channel_id": 0,
+            "subject": "Sub2 → 监控站每日导入完成",
+            "body": "\n".join(lines),
+            "extra": {"always_send": True},
+        }
+    else:
+        payload = {
+            "event": "sub2_import_failed",
+            "channel_id": 0,
+            "subject": "Sub2 → 监控站每日导入失败",
+            "body": str(result)[:800],
+            "extra": {"always_send": True},
+        }
+    status, response, raw = http_json("POST", NOTIFY_GUARD_URL, payload, timeout=15)
+    if status != 200:
+        logging.warning(
+            "notification delivery was not accepted by guard: status=%s body=%s",
+            status,
+            raw[:180],
+        )
+        return False
+    if isinstance(response, dict) and response.get("status") == "queued_delivery_retry":
+        logging.warning(
+            "notification accepted for retry after downstream delivery failure: %s",
+            response.get("error", "unknown delivery error"),
+        )
+    return True
+
+
+def run_sync():
     token = upstream_token()
     existing = list_upstream_channels(token)
     existing_by_site = {}
@@ -351,7 +411,7 @@ def main():
         if not site:
             continue
         existing_by_site.setdefault(site, []).append(channel)
-    candidates, image_only_skipped = fetch_sub2_candidates()
+    candidates, image_only_candidates = fetch_sub2_candidates()
     added = []
     enabled = []
     skipped = []
@@ -397,22 +457,38 @@ def main():
             skipped.append((item["site"], detail[:220]))
     subscribed = ensure_notification_subscription(token)
     logging.info(
-        "sync done candidates=%d image_only_skipped=%d added=%d enabled=%d skipped=%d subscribed_channels=%d",
+        "sync done candidates=%d image_only_candidates=%d added=%d enabled=%d skipped=%d subscribed_channels=%d",
         len(candidates),
-        image_only_skipped,
+        image_only_candidates,
         len(added),
         len(enabled),
         len(skipped),
         subscribed,
     )
-    print(json.dumps({
+    result = {
         "candidates": len(candidates),
-        "image_only_skipped": image_only_skipped,
+        "image_only_candidates": image_only_candidates,
         "added": [{"id": x[0], "site": x[1], "type": x[2], "source": x[3]} for x in added],
         "enabled": [{"id": x[0], "site": x[1], "type": x[2], "source": x[3]} for x in enabled],
         "skipped": [{"site": x[0], "reason": x[1]} for x in skipped[:20]],
         "subscribed_channels": subscribed,
-    }, ensure_ascii=False))
+    }
+    return result
+
+
+def main():
+    configure_logging()
+    try:
+        result = run_sync()
+        notify_import_result(result, ok=True)
+        print(json.dumps(result, ensure_ascii=False))
+    except Exception as exc:
+        logging.exception("sync failed")
+        try:
+            notify_import_result(exc, ok=False)
+        except Exception:
+            logging.exception("failed to send import failure notification")
+        raise
 
 if __name__ == "__main__":
     main()

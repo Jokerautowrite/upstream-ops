@@ -1,0 +1,40 @@
+services:
+  app:
+    image: ${IMAGE_REPOSITORY:-ghcr.io/bejix/upstream-ops}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["-config", "/app/data/config.yaml"]
+    environment:
+      TZ: Asia/Shanghai
+      SERVER_PORT: 8418
+      DATABASE_DRIVER: sqlite
+      DATABASE_PATH: /app/data/upstream-ops.db
+      SERVER_MODE: ${SERVER_MODE:-release}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      APP_SECRET: ${APP_SECRET:?APP_SECRET is required, set it in .env}
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-}
+      SUB2_POOL_MIN_ACCOUNT_COUNT: ${SUB2_POOL_MIN_ACCOUNT_COUNT:-20}
+      SUB2_POOL_MAX_CHANGES: ${SUB2_POOL_MAX_CHANGES:-20}
+      SUB2_POOL_LOW_BALANCE_THRESHOLD: ${SUB2_POOL_LOW_BALANCE_THRESHOLD:-10}
+      SUB2_POOL_ACCOUNT_RATE_MAP_IMPORT_PATH: ${SUB2_POOL_ACCOUNT_RATE_MAP_IMPORT_PATH:-}
+      SUB2_POOL_ACCOUNT_RATE_MAP_IMPORT_TARGET_ID: ${SUB2_POOL_ACCOUNT_RATE_MAP_IMPORT_TARGET_ID:-}
+    ports:
+      - "${HTTP_PORT:-8080}:8418"
+    volumes:
+      - ./data:/app/data
+    networks:
+      - default
+      - sub2api
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8418/healthz >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  sub2api:
+    external:
+      name: sub2api_default
