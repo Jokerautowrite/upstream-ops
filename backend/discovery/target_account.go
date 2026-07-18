@@ -184,8 +184,13 @@ func (s *Service) ensureTargetAccount(
 		LoadFactor:     float64(positiveOrDefault(item.Weight, 1)),
 		GroupIDs:       groupIDs,
 		Credentials: map[string]any{
-			"api_key":  strings.TrimSpace(secret),
-			"base_url": strings.TrimSpace(channel.SiteURL),
+			"api_key":                      strings.TrimSpace(secret),
+			"base_url":                     strings.TrimSpace(channel.SiteURL),
+			"pool_mode":                    true,
+			"pool_mode_retry_count":        0,
+			"pool_mode_retry_status_codes": []int{},
+			"custom_error_codes_enabled":   true,
+			"custom_error_codes":           []int{401, 402},
 		},
 	}
 	if request.Platform == "" {

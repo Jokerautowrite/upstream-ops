@@ -868,6 +868,17 @@ func TestApplyCreatesTrackedObjectsAndDoesNotDuplicateThem(t *testing.T) {
 	if credentials["api_key"] != "sk-discovery-100" || credentials["base_url"] != source.SiteURL {
 		t.Fatalf("account source credentials = %#v", credentials)
 	}
+	if credentials["pool_mode"] != true || credentials["pool_mode_retry_count"] != float64(0) || credentials["custom_error_codes_enabled"] != true {
+		t.Fatalf("account pool-mode credentials = %#v", credentials)
+	}
+	retryCodes, ok := credentials["pool_mode_retry_status_codes"].([]any)
+	if !ok || len(retryCodes) != 0 {
+		t.Fatalf("account pool-mode retry codes = %#v", credentials["pool_mode_retry_status_codes"])
+	}
+	customCodes, ok := credentials["custom_error_codes"].([]any)
+	if !ok || len(customCodes) != 2 || customCodes[0] != float64(401) || customCodes[1] != float64(402) {
+		t.Fatalf("account custom error codes = %#v", credentials["custom_error_codes"])
+	}
 	if _, ok := credentials["model_mapping"].(map[string]any); !ok {
 		t.Fatalf("model mapping was not written: %#v", credentials)
 	}
