@@ -468,10 +468,12 @@ func TestMatcherTreatsConflictingExactKeyCandidatesAsAmbiguous(t *testing.T) {
 }
 
 func TestMatcherReportsUnavailableWhenKeyRevealFails(t *testing.T) {
+	bal := 246.35
 	channels := &fakeChannels{items: []storage.Channel{{
 		ID:             1,
 		SiteURL:        "https://api.example.test/v1",
 		MonitorEnabled: true,
+		LastBalance:    &bal,
 	}}}
 	keys := &fakeKeys{
 		items:    map[uint][]connector.APIKey{1: {{ID: 11, GroupRatio: 0.05}}},
@@ -483,8 +485,12 @@ func TestMatcherReportsUnavailableWhenKeyRevealFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("match accounts: %v", err)
 	}
+	// Key 对不上（reveal 失败）仍标 upstream_unavailable，但同站余额必须能补上。
 	if matches[7].status != "upstream_unavailable" || matches[7].matched {
 		t.Fatalf("reveal failure was misclassified: %#v", matches[7])
+	}
+	if matches[7].balance == nil || *matches[7].balance != bal {
+		t.Fatalf("expected URL balance after reveal failure, got %#v", matches[7])
 	}
 }
 

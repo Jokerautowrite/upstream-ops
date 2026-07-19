@@ -151,18 +151,22 @@ func (m *matcher) matchAccounts(ctx context.Context, accounts []sub2api.PoolAcco
 	}()
 
 	for item := range results {
+		// 即使 List/Reveal API Key 失败（常见 429），监控站 last_balance 仍应可用于
+		// 同 URL 账号补余额。旧逻辑 continue 会丢掉 byURL，导致「监控有余额、池里空」。
+		if item.normalized != "" {
+			channelByID[item.channel.ID] = item.channel
+			byURL[item.normalized] = append(byURL[item.normalized], item.urlCandidate)
+			byURLChannel[item.normalized] = append(byURLChannel[item.normalized], item.channel)
+			nameKey := normalizeMatchName(item.channel.Name)
+			if nameKey != "" {
+				nameIndex[nameKey] = append(nameIndex[nameKey], item.channel)
+			}
+		}
 		if item.err != nil {
 			if item.normalized != "" {
 				unavailableURLs[item.normalized] = struct{}{}
 			}
 			continue
-		}
-		channelByID[item.channel.ID] = item.channel
-		byURL[item.normalized] = append(byURL[item.normalized], item.urlCandidate)
-		byURLChannel[item.normalized] = append(byURLChannel[item.normalized], item.channel)
-		nameKey := normalizeMatchName(item.channel.Name)
-		if nameKey != "" {
-			nameIndex[nameKey] = append(nameIndex[nameKey], item.channel)
 		}
 		for keyHash, keyCandidates := range item.candidates {
 			byKeyHash[keyHash] = append(byKeyHash[keyHash], keyCandidates...)
