@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"math"
 	"net"
 	"net/url"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -15,6 +18,8 @@ import (
 	"github.com/bejix/upstream-ops/backend/connector/sub2api"
 	"github.com/bejix/upstream-ops/backend/storage"
 )
+
+var embeddedRatePattern = regexp.MustCompile(`(?i)(?:^|[^0-9])(0?\.\d{1,6}|\d+\.\d{1,6})(?:[^0-9]|$)`)
 
 type upstreamMatch struct {
 	status         string
@@ -604,21 +609,82 @@ func pickChannelRate(snapshots []storage.RateSnapshot, account sub2api.PoolAccou
 		}
 	}
 
-	// 2) if channel has one unique positive ratio across all groups, use it
+	// 2) account name embeds a decimal (e.g. "PLUS 0.04 天望") → nearest monitor ratio
+	if hinted := extractEmbeddedRates(account.Account.Name); len(hinted) > 0 {
+		allPositive := positiveRates(snapshots)
+		if rate, ok := closestRate(allPositive, hinted); ok {
+			return &rate
+		}
+	}
+
+	// 3) if channel has one unique positive ratio across all groups, use it
+	all := positiveRates(snapshots)
+	if rate, ok := uniquePositiveRate(all); ok {
+		return &rate
+	}
+	// 4) lowest positive ratio as conservative display (still from monitor data)
+	if rate, ok := lowestPositiveRate(all); ok {
+		return &rate
+	}
+	return nil
+}
+
+func positiveRates(snapshots []storage.RateSnapshot) []float64 {
 	all := make([]float64, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		if snapshot.Ratio > 0 {
 			all = append(all, snapshot.Ratio)
 		}
 	}
-	if rate, ok := uniquePositiveRate(all); ok {
-		return &rate
+	return all
+}
+
+func extractEmbeddedRates(name string) []float64 {
+	matches := embeddedRatePattern.FindAllStringSubmatch(name, -1)
+	if len(matches) == 0 {
+		return nil
 	}
-	// 3) lowest positive ratio as conservative display (still from monitor data)
-	if rate, ok := lowestPositiveRate(all); ok {
-		return &rate
+	out := make([]float64, 0, len(matches))
+	seen := map[float64]struct{}{}
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		value, err := strconv.ParseFloat(match[1], 64)
+		if err != nil || value <= 0 || value > 10 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
 	}
-	return nil
+	return out
+}
+
+func closestRate(candidates, hints []float64) (float64, bool) {
+	if len(candidates) == 0 || len(hints) == 0 {
+		return 0, false
+	}
+	bestRate := 0.0
+	bestDist := math.MaxFloat64
+	found := false
+	for _, hint := range hints {
+		for _, candidate := range candidates {
+			dist := math.Abs(candidate - hint)
+			// Require tight agreement so 0.04 does not latch onto 0.4.
+			if dist > 0.02 && dist/math.Max(hint, 1e-9) > 0.25 {
+				continue
+			}
+			if !found || dist < bestDist || (dist == bestDist && candidate < bestRate) {
+				bestRate = candidate
+				bestDist = dist
+				found = true
+			}
+		}
+	}
+	return bestRate, found
 }
 
 func uniquePositiveRate(values []float64) (float64, bool) {
