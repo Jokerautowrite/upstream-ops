@@ -113,7 +113,9 @@ func TestResolveAccountRateMappingsUsesManualRateOnlyForSnapshotConflict(t *test
 	}
 }
 
-func TestSnapshotKeepsKeyMismatchBlockedFromAccountMapping(t *testing.T) {
+func TestSnapshotAppliesAccountMappingWhenKeyMismatch(t *testing.T) {
+	// Operator-maintained account_id mapping must still fill rate when the
+	// revealed monitor key set does not contain the pool account key.
 	service, _ := newTestService(t, []sub2api.PoolAccount{
 		poolAccount(11, "https://api.example.test/v1", "actual-key", 10),
 	}, Config{MinimumAccountCount: 1})
@@ -141,8 +143,14 @@ func TestSnapshotKeepsKeyMismatchBlockedFromAccountMapping(t *testing.T) {
 		t.Fatalf("snapshot: %v", err)
 	}
 	got := snapshot.Accounts[0]
-	if got.MatchStatus != "key_mismatch" || got.Availability.Matched || got.UpstreamRate != nil {
-		t.Fatalf("key mismatch was overridden by mapping: %#v", got)
+	if got.MatchStatus != "key_mismatch" {
+		t.Fatalf("match status = %q, want key_mismatch", got.MatchStatus)
+	}
+	if got.UpstreamRate == nil || *got.UpstreamRate != 0.3 {
+		t.Fatalf("account mapping not applied on key_mismatch: %#v", got)
+	}
+	if got.MatchStatus == "key_exact" {
+		t.Fatalf("mapping must not pretend key_exact: %#v", got)
 	}
 }
 

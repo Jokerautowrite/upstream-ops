@@ -68,6 +68,9 @@ func (s *Service) SetDispatcher(dispatcher EventDispatcher) {
 func (s *Service) SetAccountRateMappingStore(store AccountRateMappingStore, rates RateSnapshotStore) {
 	s.accountRateMappings = store
 	s.rates = rates
+	if s.matcher != nil {
+		s.matcher.setRates(rates)
+	}
 }
 
 func (s *Service) Snapshot(ctx context.Context, targetID uint) (*Snapshot, error) {
@@ -1330,8 +1333,11 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 	return snapshot, nil
 }
 
+// allowsAccountRateMapping accepts every status except true key ambiguity.
+// Explicit account-id mappings in the monitor DB are intentional operator data
+// and must still apply when fingerprint matching misses.
 func allowsAccountRateMapping(match upstreamMatch) bool {
-	return match.status != "key_mismatch" && match.status != "key_ambiguous"
+	return match.status != "key_ambiguous"
 }
 
 func lowestGroups(ids []int64, groups map[int64]GroupSnapshot) []GroupRef {

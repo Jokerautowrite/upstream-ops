@@ -281,7 +281,9 @@ func TestMatcherUsesSameOriginKeyAcrossURLPath(t *testing.T) {
 	}
 }
 
-func TestMatcherRejectsSameKeyOnDifferentOrigin(t *testing.T) {
+func TestMatcherMatchesUniqueKeyAcrossOrigin(t *testing.T) {
+	// A full API-key hash is a stronger identity than base_url. When the key is
+	// unique in the monitor inventory, accept it even if Sub2 stored a different host.
 	channels := &fakeChannels{items: []storage.Channel{{
 		ID:             7,
 		SiteURL:        "https://first.example.test",
@@ -297,8 +299,39 @@ func TestMatcherRejectsSameKeyOnDifferentOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("match accounts: %v", err)
 	}
-	if matches[1].status != "key_mismatch" || matches[1].matched {
-		t.Fatalf("cross-origin key matched unexpectedly: %#v", matches[1])
+	if matches[1].status != "key_exact" || !matches[1].matched || matches[1].rate == nil || *matches[1].rate != 0.05 {
+		t.Fatalf("unique cross-origin key should match: %#v", matches[1])
+	}
+}
+
+func TestMatcherMatchesUniqueChannelNameWhenKeyMissing(t *testing.T) {
+	channels := &fakeChannels{items: []storage.Channel{{
+		ID:             11,
+		Name:           "生图专用老登",
+		SiteURL:        "https://img.example.test",
+		MonitorEnabled: true,
+		LastBalance:    floatPtr(12),
+	}}}
+	keys := &fakeKeys{
+		items:    map[uint][]connector.APIKey{11: {{ID: 1, GroupRatio: 1.0}}},
+		revealed: map[string]string{"11:1": "other-key"},
+	}
+	m := newMatcher(channels, keys)
+	m.setRates(staticRateSnapshots{items: map[uint][]storage.RateSnapshot{
+		11: {{ChannelID: 11, ModelName: "gpt-image-2", Ratio: 1.0}},
+	}})
+	account := poolAccount(2782, "https://img.example.test", "pool-key", 10)
+	account.Account.Name = "生图专用老登"
+	matches, err := m.matchAccounts(context.Background(), []sub2api.PoolAccount{account})
+	if err != nil {
+		t.Fatalf("match accounts: %v", err)
+	}
+	got := matches[2782]
+	if got.status != "channel_name_exact" || got.rate == nil || *got.rate != 1.0 {
+		t.Fatalf("name match failed: %#v", got)
+	}
+	if got.balance == nil || *got.balance != 12 {
+		t.Fatalf("balance not filled from channel: %#v", got)
 	}
 }
 
