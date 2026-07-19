@@ -114,6 +114,13 @@ type CandidateDTO struct {
 	ApplyError             string     `json:"apply_error,omitempty"`
 	LastAttemptAt          *time.Time `json:"last_attempt_at,omitempty"`
 	AppliedAt              *time.Time `json:"applied_at,omitempty"`
+	ProbeStatus            string     `json:"probe_status,omitempty"`
+	ProbeError             string     `json:"probe_error,omitempty"`
+	ProbeDetail            string     `json:"probe_detail,omitempty"`
+	ProbeModel             string     `json:"probe_model,omitempty"`
+	ProbeModelCount        int        `json:"probe_model_count"`
+	ProbeLatencyMs         int        `json:"probe_latency_ms"`
+	ProbedAt               *time.Time `json:"probed_at,omitempty"`
 	DiscoveredAt           time.Time  `json:"discovered_at"`
 	LastSeenAt             time.Time  `json:"last_seen_at"`
 }
@@ -531,6 +538,13 @@ func (s *Service) toDTO(item *storage.GroupDiscoveryCandidate) (CandidateDTO, er
 		ApplyError:             item.ApplyError,
 		LastAttemptAt:          item.LastAttemptAt,
 		AppliedAt:              item.AppliedAt,
+		ProbeStatus:            item.ProbeStatus,
+		ProbeError:             item.ProbeError,
+		ProbeDetail:            item.ProbeDetail,
+		ProbeModel:             item.ProbeModel,
+		ProbeModelCount:        item.ProbeModelCount,
+		ProbeLatencyMs:         item.ProbeLatencyMs,
+		ProbedAt:               item.ProbedAt,
 		DiscoveredAt:           item.DiscoveredAt,
 		LastSeenAt:             item.LastSeenAt,
 	}, nil

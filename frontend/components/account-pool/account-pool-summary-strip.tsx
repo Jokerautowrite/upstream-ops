@@ -11,6 +11,14 @@ import type { Sub2PoolSnapshotSummary, Sub2PoolTarget } from "@/lib/api-types"
 import { dateTime, relativeTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
+export type AccountPoolSummaryTileKey =
+  | "total"
+  | "schedulable"
+  | "healthy"
+  | "debt"
+  | "missing_multiplier"
+  | "problems"
+
 interface AccountPoolSummaryStripProps {
   targets: Sub2PoolTarget[]
   selectedTargetID: string | null
@@ -22,23 +30,41 @@ interface AccountPoolSummaryStripProps {
     | "debt_accounts"
     | "missing_multiplier_accounts"
   >>
+  problemCount: number
+  activeTile: AccountPoolSummaryTileKey | null
   refreshedAt?: string | null
   loading?: boolean
   onTargetChange: (targetID: string) => void
   onRefresh: () => void
+  onTileClick: (key: AccountPoolSummaryTileKey) => void
 }
 
 function SummaryTile({
   label,
   value,
   tone = "default",
+  active,
+  onClick,
 }: {
   label: string
   value: number
   tone?: "default" | "success" | "warning" | "danger"
+  active?: boolean
+  onClick: () => void
 }) {
   return (
-    <div className="min-w-0 rounded-lg border border-border bg-background px-3 py-2">
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "min-w-0 rounded-lg border bg-background px-3 py-2 text-left transition-colors",
+        "hover:border-foreground/25 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        active
+          ? "border-primary ring-2 ring-primary/30 bg-primary/5"
+          : "border-border",
+      )}
+    >
       <div className="text-[11px] leading-4 text-muted-foreground">{label}</div>
       <div
         className={cn(
@@ -50,7 +76,7 @@ function SummaryTile({
       >
         {value.toLocaleString("zh-CN")}
       </div>
-    </div>
+    </button>
   )
 }
 
@@ -58,10 +84,13 @@ export function AccountPoolSummaryStrip({
   targets,
   selectedTargetID,
   summary,
+  problemCount,
+  activeTile,
   refreshedAt,
   loading,
   onTargetChange,
   onRefresh,
+  onTileClick,
 }: AccountPoolSummaryStripProps) {
   return (
     <section className="rounded-lg border border-border bg-card p-3 shadow-sm sm:p-4">
@@ -105,15 +134,47 @@ export function AccountPoolSummaryStrip({
           </p>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5 lg:w-[660px]">
-          <SummaryTile label="账号总数" value={summary.total_accounts} />
-          <SummaryTile label="可调度" value={summary.schedulable_accounts} tone="success" />
-          <SummaryTile label="健康" value={summary.healthy_accounts} tone="success" />
-          <SummaryTile label="欠费" value={summary.debt_accounts} tone="danger" />
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:w-[720px] lg:grid-cols-6">
+          <SummaryTile
+            label="账号总数"
+            value={summary.total_accounts}
+            active={activeTile === "total"}
+            onClick={() => onTileClick("total")}
+          />
+          <SummaryTile
+            label="问题"
+            value={problemCount}
+            tone={problemCount > 0 ? "warning" : "default"}
+            active={activeTile === "problems"}
+            onClick={() => onTileClick("problems")}
+          />
+          <SummaryTile
+            label="可调度"
+            value={summary.schedulable_accounts}
+            tone="success"
+            active={activeTile === "schedulable"}
+            onClick={() => onTileClick("schedulable")}
+          />
+          <SummaryTile
+            label="健康"
+            value={summary.healthy_accounts}
+            tone="success"
+            active={activeTile === "healthy"}
+            onClick={() => onTileClick("healthy")}
+          />
+          <SummaryTile
+            label="欠费"
+            value={summary.debt_accounts}
+            tone="danger"
+            active={activeTile === "debt"}
+            onClick={() => onTileClick("debt")}
+          />
           <SummaryTile
             label="缺倍率"
             value={summary.missing_multiplier_accounts}
             tone={summary.missing_multiplier_accounts > 0 ? "warning" : "default"}
+            active={activeTile === "missing_multiplier"}
+            onClick={() => onTileClick("missing_multiplier")}
           />
         </div>
       </div>

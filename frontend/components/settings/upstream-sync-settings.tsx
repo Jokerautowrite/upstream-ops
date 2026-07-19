@@ -897,7 +897,10 @@ export function UpstreamSyncSettings() {
 
   return (
     <div className="space-y-5">
-      <GroupDiscoverySettings />
+      {/* 顶部入口锚点：Header「发现」→ ?tab=upstream-sync#group-discovery */}
+      <div id="group-discovery">
+        <GroupDiscoverySettings />
+      </div>
       <Panel
         title="Sub2API 上游列表"
         description="主列表只展示可写入的 Sub2API 上游；点击分组管理后在对应卡片内维护同步分组。"

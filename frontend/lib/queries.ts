@@ -11,6 +11,7 @@ import type {
   ChannelPage,
   CostTrendPoint,
   DashboardSummary,
+  GroupDiscoveryCandidate,
   NotificationChannel,
   NotificationLogPage,
   RateChangeLogPage,
@@ -253,5 +254,11 @@ export function useSub2PoolAutomation(targetID: string | null) {
   if (targetID) q.set("target_id", targetID)
   return useApi<Sub2PoolAutomationStatus>(
     targetID ? `/sub2-pool/automation?${q.toString()}` : null,
+  )
+}
+
+export function useGroupDiscoveryCandidates(enabled = true) {
+  return useApi<GroupDiscoveryCandidate[]>(
+    enabled ? "/upstream-sync/group-discovery/candidates" : null,
   )
 }

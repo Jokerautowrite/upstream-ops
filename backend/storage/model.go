@@ -440,10 +440,21 @@ type GroupDiscoveryCandidate struct {
 	ApplyError    string     `gorm:"type:text" json:"apply_error,omitempty"`
 	LastAttemptAt *time.Time `json:"last_attempt_at,omitempty"`
 	AppliedAt     *time.Time `json:"applied_at,omitempty"`
-	DiscoveredAt  time.Time  `gorm:"not null;index" json:"discovered_at"`
-	LastSeenAt    time.Time  `gorm:"not null;index" json:"last_seen_at"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+
+	// Probe* records the latest group liveness check (source key models/chat,
+	// plus Sub2 admin test when a target account already exists).
+	ProbeStatus     string     `gorm:"size:16;not null;default:'';index" json:"probe_status,omitempty"`
+	ProbeError      string     `gorm:"type:text" json:"probe_error,omitempty"`
+	ProbeDetail     string     `gorm:"type:text" json:"probe_detail,omitempty"`
+	ProbeModel      string     `gorm:"size:256;not null;default:''" json:"probe_model,omitempty"`
+	ProbeModelCount int        `gorm:"not null;default:0" json:"probe_model_count"`
+	ProbeLatencyMs  int        `gorm:"not null;default:0" json:"probe_latency_ms"`
+	ProbedAt        *time.Time `json:"probed_at,omitempty"`
+
+	DiscoveredAt time.Time `gorm:"not null;index" json:"discovered_at"`
+	LastSeenAt   time.Time `gorm:"not null;index" json:"last_seen_at"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func (GroupDiscoveryCandidate) TableName() string { return "group_discovery_candidates" }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { useTheme } from "next-themes"
-import { Activity, Github, Home, LogOut, RefreshCw, Sun, Moon, Settings, UsersRound } from "lucide-react"
+import { Activity, Github, Home, ListTree, LogOut, RefreshCw, Sun, Moon, Settings, UsersRound } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/auth-context"
 import { apiFetch } from "@/lib/api"
 import { useTriggerRefresh } from "@/lib/refresh-context"
-import { useAppVersion, useChannels } from "@/lib/queries"
+import { useAppVersion, useChannels, useGroupDiscoveryCandidates } from "@/lib/queries"
 import type { AppVersion } from "@/lib/api-types"
 import { relativeTime } from "@/lib/format"
 import { toast } from "sonner"
@@ -25,9 +25,17 @@ export function MonitorHeader() {
   const refresh = useTriggerRefresh()
   const channels = useChannels()
   const appVersion = useAppVersion()
+  const discoveryCandidates = useGroupDiscoveryCandidates()
   const [mounted, setMounted] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [checkingVersion, setCheckingVersion] = useState(false)
+
+  /** 待审核候选数；加载失败静默，不阻塞主 UI */
+  const pendingDiscoveryCount = useMemo(() => {
+    const list = discoveryCandidates.data
+    if (!list) return 0
+    return list.filter((c) => c.status === "pending").length
+  }, [discoveryCandidates.data])
 
   const appTitle = appVersion.data?.title?.trim() || "UpstreamOps"
   const version = appVersion.data?.version?.trim()
@@ -203,6 +211,36 @@ export function MonitorHeader() {
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">
               {"Sub2 账号池"}
+            </TooltipContent>
+          </Tooltip>
+
+          {/* 分组发现入口 → 设置 · 上游动态同步 */}
+          <Tooltip delayDuration={200}>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate("/settings?tab=upstream-sync#group-discovery")}
+                className="relative h-8 gap-1.5 border-border px-2 text-foreground hover:bg-muted"
+                aria-label={
+                  pendingDiscoveryCount > 0
+                    ? `分组发现，${pendingDiscoveryCount} 条待审核`
+                    : "分组发现"
+                }
+              >
+                <ListTree className="size-3.5" />
+                <span className="hidden lg:inline">发现</span>
+                {pendingDiscoveryCount > 0 ? (
+                  <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold leading-none text-white">
+                    {pendingDiscoveryCount > 99 ? "99+" : pendingDiscoveryCount}
+                  </span>
+                ) : null}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              {pendingDiscoveryCount > 0
+                ? `分组发现 · ${pendingDiscoveryCount} 条待审核`
+                : "分组发现"}
             </TooltipContent>
           </Tooltip>
 

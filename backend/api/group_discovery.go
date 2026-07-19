@@ -18,6 +18,8 @@ func registerGroupDiscovery(g *gin.RouterGroup, d *Deps) {
 	gp.POST("/scan", func(c *gin.Context) { scanGroupDiscovery(c, d) })
 	gp.POST("/candidates/:id/approve", func(c *gin.Context) { approveGroupDiscoveryCandidate(c, d) })
 	gp.POST("/candidates/:id/reject", func(c *gin.Context) { rejectGroupDiscoveryCandidate(c, d) })
+	gp.POST("/candidates/:id/probe", func(c *gin.Context) { probeGroupDiscoveryCandidate(c, d) })
+	gp.POST("/probe", func(c *gin.Context) { probeGroupDiscoveryCandidates(c, d) })
 	gp.POST("/apply", func(c *gin.Context) { applyGroupDiscoveryCandidates(c, d) })
 }
 
@@ -86,6 +88,36 @@ func applyGroupDiscoveryCandidates(c *gin.Context, d *Deps) {
 		return
 	}
 	result, err := d.GroupDiscovery.Apply(c.Request.Context(), in.CandidateIDs)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+func probeGroupDiscoveryCandidate(c *gin.Context, d *Deps) {
+	id, err := uintParam(c, "id")
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	result, err := d.GroupDiscovery.Probe(c.Request.Context(), id)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+func probeGroupDiscoveryCandidates(c *gin.Context, d *Deps) {
+	var in struct {
+		CandidateIDs []uint `json:"candidate_ids"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	result, err := d.GroupDiscovery.ProbeMany(c.Request.Context(), in.CandidateIDs)
 	if err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return

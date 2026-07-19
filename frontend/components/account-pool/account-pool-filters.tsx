@@ -8,7 +8,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { cn } from "@/lib/utils"
 
+export type AccountPoolViewMode = "problems" | "all"
+export type AccountPoolQuickFocus =
+  | "none"
+  | "debt"
+  | "missing_multiplier"
+  | "unhealthy"
+  | "priority_mismatch"
+  | "schedulable"
+  | "disabled"
 export type AccountPoolScheduleFilter = "all" | "schedulable" | "disabled"
 export type AccountPoolHealthFilter = "all" | "healthy" | "limited" | "warning" | "failed" | "unknown"
 export type AccountPoolMissingFilter =
@@ -38,6 +48,19 @@ export interface AccountPoolFilterState {
   health: AccountPoolHealthFilter
   missing: AccountPoolMissingFilter
   sort: AccountPoolSort
+  viewMode: AccountPoolViewMode
+  quickFocus: AccountPoolQuickFocus
+}
+
+export const defaultAccountPoolFilters: AccountPoolFilterState = {
+  query: "",
+  businessChannel: "all",
+  schedule: "all",
+  health: "all",
+  missing: "all",
+  sort: "upstream_multiplier_asc",
+  viewMode: "problems",
+  quickFocus: "none",
 }
 
 interface AccountPoolFiltersProps {
@@ -45,6 +68,7 @@ interface AccountPoolFiltersProps {
   businessChannels: string[]
   resultCount: number
   totalCount: number
+  problemCount: number
   onChange: (filters: AccountPoolFilterState) => void
 }
 
@@ -91,6 +115,7 @@ export function AccountPoolFilters({
   businessChannels,
   resultCount,
   totalCount,
+  problemCount,
   onChange,
 }: AccountPoolFiltersProps) {
   const hasActiveFilters =
@@ -99,7 +124,9 @@ export function AccountPoolFilters({
     filters.schedule !== "all" ||
     filters.health !== "all" ||
     filters.missing !== "all" ||
-    filters.sort !== "upstream_multiplier_asc"
+    filters.sort !== "upstream_multiplier_asc" ||
+    filters.viewMode !== "problems" ||
+    filters.quickFocus !== "none"
 
   function patch(next: Partial<AccountPoolFilterState>) {
     onChange({ ...filters, ...next })
@@ -107,6 +134,56 @@ export function AccountPoolFilters({
 
   return (
     <section className="rounded-lg border border-border bg-card p-3 shadow-sm">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5">
+          <button
+            type="button"
+            onClick={() =>
+              patch({
+                viewMode: "problems",
+                quickFocus: "none",
+                schedule: "all",
+                health: "all",
+                missing: "all",
+              })
+            }
+            className={cn(
+              "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+              filters.viewMode === "problems"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            问题
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              patch({
+                viewMode: "all",
+                quickFocus: "none",
+                schedule: "all",
+                health: "all",
+                missing: "all",
+              })
+            }
+            className={cn(
+              "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+              filters.viewMode === "all"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            全部
+          </button>
+        </div>
+        <span className="text-xs text-muted-foreground">
+          问题 {problemCount.toLocaleString("zh-CN")} / 共 {totalCount.toLocaleString("zh-CN")}
+          {" · 当前显示 "}
+          {resultCount.toLocaleString("zh-CN")}
+        </span>
+      </div>
+
       <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1.4fr)_repeat(5,minmax(0,1fr))_auto]">
         <div className="relative min-w-0">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -137,7 +214,12 @@ export function AccountPoolFilters({
 
         <Select
           value={filters.schedule}
-          onValueChange={(value) => patch({ schedule: value as AccountPoolScheduleFilter })}
+          onValueChange={(value) =>
+            patch({
+              schedule: value as AccountPoolScheduleFilter,
+              quickFocus: "none",
+            })
+          }
         >
           <SelectTrigger className="w-full">
             <SelectValue placeholder="调度状态" />
@@ -153,7 +235,12 @@ export function AccountPoolFilters({
 
         <Select
           value={filters.health}
-          onValueChange={(value) => patch({ health: value as AccountPoolHealthFilter })}
+          onValueChange={(value) =>
+            patch({
+              health: value as AccountPoolHealthFilter,
+              quickFocus: "none",
+            })
+          }
         >
           <SelectTrigger className="w-full">
             <SelectValue placeholder="健康状态" />
@@ -169,7 +256,12 @@ export function AccountPoolFilters({
 
         <Select
           value={filters.missing}
-          onValueChange={(value) => patch({ missing: value as AccountPoolMissingFilter })}
+          onValueChange={(value) =>
+            patch({
+              missing: value as AccountPoolMissingFilter,
+              quickFocus: "none",
+            })
+          }
         >
           <SelectTrigger className="w-full">
             <SelectValue placeholder="数据缺失" />
@@ -205,24 +297,11 @@ export function AccountPoolFilters({
           size="sm"
           className="h-9 gap-1.5"
           disabled={!hasActiveFilters}
-          onClick={() =>
-            onChange({
-              query: "",
-              businessChannel: "all",
-              schedule: "all",
-              health: "all",
-              missing: "all",
-              sort: "upstream_multiplier_asc",
-            })
-          }
+          onClick={() => onChange({ ...defaultAccountPoolFilters })}
         >
           <X className="size-3.5" />
           清空
         </Button>
-      </div>
-
-      <div className="mt-2 text-xs text-muted-foreground">
-        显示 {resultCount.toLocaleString("zh-CN")} / {totalCount.toLocaleString("zh-CN")} 个账号
       </div>
     </section>
   )

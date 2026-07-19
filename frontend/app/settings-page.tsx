@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import {
   Bell,
@@ -65,7 +66,15 @@ interface ProxyTestResult {
   error?: string;
 }
 
+const SETTINGS_TABS = new Set([
+  "system",
+  "notifications",
+  "captcha",
+  "upstream-sync",
+]);
+
 export default function SettingsPage() {
+  const [searchParams] = useSearchParams();
   const query = useSystemConfig();
   const notifications = useNotificationChannels();
   const captchas = useCaptchaConfigs();
@@ -90,8 +99,18 @@ export default function SettingsPage() {
     null,
   );
   const [busyCaptchaID, setBusyCaptchaID] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState("system");
+  const tabFromQuery = searchParams.get("tab");
+  const [activeTab, setActiveTab] = useState(() =>
+    tabFromQuery && SETTINGS_TABS.has(tabFromQuery) ? tabFromQuery : "system",
+  );
   const [versionInfo, setVersionInfo] = useState<AppVersion | null>(null);
+
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab && SETTINGS_TABS.has(tab)) {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (query.data?.config) {

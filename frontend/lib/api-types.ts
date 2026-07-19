@@ -742,6 +742,8 @@ export type GroupDiscoveryCandidateStatus =
   | "applied"
   | "failed"
 
+export type GroupDiscoveryProbeStatus = "" | "ok" | "fail"
+
 export interface GroupDiscoveryCandidate {
   id: number
   source_channel_id: number
@@ -767,8 +769,28 @@ export interface GroupDiscoveryCandidate {
   apply_error?: string
   last_attempt_at?: string | null
   applied_at?: string | null
+  probe_status?: GroupDiscoveryProbeStatus | string
+  probe_error?: string
+  probe_detail?: string
+  probe_model?: string
+  probe_model_count?: number
+  probe_latency_ms?: number
+  probed_at?: string | null
   discovered_at: string
   last_seen_at: string
+}
+
+export interface GroupDiscoveryProbeResult {
+  candidate: GroupDiscoveryCandidate
+  ok: boolean
+  error?: string
+}
+
+export interface GroupDiscoveryProbeBatchResult {
+  requested: number
+  ok: number
+  failed: number
+  items: GroupDiscoveryProbeResult[]
 }
 
 export interface GroupDiscoveryScanError {

@@ -138,3 +138,57 @@ export function accountBalanceLabel(account: Sub2PoolAccount) {
 export function accountSchedulableLabel(account: Sub2PoolAccount) {
   return isSchedulable(account) ? "可调度" : "暂停"
 }
+
+/** 当前优先级与建议优先级都有限值且不相等。 */
+export function hasPriorityMismatch(account: Sub2PoolAccount) {
+  const current = account.current_priority
+  const suggested = account.suggested_priority
+  if (current == null || suggested == null) return false
+  if (!Number.isFinite(current) || !Number.isFinite(suggested)) return false
+  return current !== suggested
+}
+
+/** 是否缺倍率（字段为 null 或 missing 标注含倍率）。 */
+export function isMissingMultiplier(account: Sub2PoolAccount) {
+  return account.upstream_multiplier == null || hasMissingAccountField(account, "倍率")
+}
+
+/**
+ * 需要处理的「问题账号」：
+ * - 余额 debt/low
+ * - 健康非 healthy
+ * - 缺倍率
+ * - 优先级错位
+ * - 关键字段缺失
+ */
+export function isProblemAccount(account: Sub2PoolAccount) {
+  const balanceTone = accountBalanceTone(account)
+  if (balanceTone === "debt" || balanceTone === "low") return true
+  if (accountHealthTone(account) !== "healthy") return true
+  if (isMissingMultiplier(account)) return true
+  if (hasPriorityMismatch(account)) return true
+  if (accountMissingLabels(account).length > 0) return true
+  return false
+}
+
+/** 问题原因标签，供列表小标签展示。 */
+export function accountProblemReasons(account: Sub2PoolAccount): string[] {
+  const reasons: string[] = []
+  const balanceTone = accountBalanceTone(account)
+  if (balanceTone === "debt") reasons.push("欠费")
+  else if (balanceTone === "low") reasons.push("余额偏低")
+
+  const healthTone = accountHealthTone(account)
+  if (healthTone !== "healthy") {
+    reasons.push(accountHealthLabel(account))
+  }
+
+  if (isMissingMultiplier(account)) reasons.push("缺倍率")
+  if (hasPriorityMismatch(account)) reasons.push("优先级错位")
+
+  for (const label of accountMissingLabels(account)) {
+    if (label === "倍率缺失" && reasons.includes("缺倍率")) continue
+    if (!reasons.includes(label)) reasons.push(label)
+  }
+  return reasons
+}

@@ -179,6 +179,25 @@ func (r *GroupDiscoveryCandidates) SetTargetAccount(id uint, accountID *int64, n
 	}).Error
 }
 
+// SetProbeResult persists the latest group liveness check without touching
+// review status or remote ownership fields.
+func (r *GroupDiscoveryCandidates) SetProbeResult(
+	id uint,
+	status, errText, detail, model string,
+	modelCount, latencyMs int,
+	probedAt *time.Time,
+) error {
+	return r.db.Model(&GroupDiscoveryCandidate{}).Where("id = ?", id).Updates(map[string]any{
+		"probe_status":      status,
+		"probe_error":       errText,
+		"probe_detail":      detail,
+		"probe_model":       model,
+		"probe_model_count": modelCount,
+		"probe_latency_ms":  latencyMs,
+		"probed_at":         probedAt,
+	}).Error
+}
+
 func (r *GroupDiscoveryCandidates) ParseTargetGroupIDs(item *GroupDiscoveryCandidate) ([]int64, error) {
 	return parseInt64Array(item.TargetGroupIDsJSON)
 }

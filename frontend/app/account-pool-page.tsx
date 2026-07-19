@@ -7,6 +7,7 @@ import { AccountPoolApplyDialog } from "@/components/account-pool/account-pool-a
 import { AccountPoolAutomationCard } from "@/components/account-pool/account-pool-automation-card"
 import {
   AccountPoolFilters,
+  defaultAccountPoolFilters,
   type AccountPoolFilterState,
   type AccountPoolSort,
 } from "@/components/account-pool/account-pool-filters"
@@ -16,13 +17,19 @@ import {
 } from "@/components/account-pool/account-pool-list"
 import { AccountPoolPreviewPanel } from "@/components/account-pool/account-pool-preview-panel"
 import { AccountPoolSkeleton } from "@/components/account-pool/account-pool-skeleton"
-import { AccountPoolSummaryStrip } from "@/components/account-pool/account-pool-summary-strip"
+import {
+  AccountPoolSummaryStrip,
+  type AccountPoolSummaryTileKey,
+} from "@/components/account-pool/account-pool-summary-strip"
 import {
   accountBalanceTone,
   accountBusinessChannel,
   accountHealthTone,
   accountMissingLabels,
   hasMissingAccountField,
+  hasPriorityMismatch,
+  isMissingMultiplier,
+  isProblemAccount,
   isSchedulable,
 } from "@/components/account-pool/account-pool-status"
 import { Button } from "@/components/ui/button"
@@ -42,15 +49,6 @@ import type {
   Sub2PoolSchedulableResult,
   Sub2PoolSnapshotSummary,
 } from "@/lib/api-types"
-
-const defaultFilters: AccountPoolFilterState = {
-  query: "",
-  businessChannel: "all",
-  schedule: "all",
-  health: "all",
-  missing: "all",
-  sort: "upstream_multiplier_asc",
-}
 
 function compareAccounts(a: Sub2PoolAccount, b: Sub2PoolAccount, sort: AccountPoolSort) {
   const separator = sort.lastIndexOf("_")
@@ -107,11 +105,107 @@ function matchesMissingFilter(account: Sub2PoolAccount, filter: AccountPoolFilte
   const missing = accountMissingLabels(account)
   if (filter === "any") return missing.length > 0
   if (filter === "none") return missing.length === 0
-  if (filter === "multiplier") return account.upstream_multiplier == null || hasMissingAccountField(account, "倍率")
+  if (filter === "multiplier") return isMissingMultiplier(account)
   if (filter === "priority") return account.current_priority == null || hasMissingAccountField(account, "优先级")
   if (filter === "balance") return account.balance == null || hasMissingAccountField(account, "余额")
   if (filter === "health") return accountHealthTone(account) === "unknown" || hasMissingAccountField(account, "健康")
   return true
+}
+
+function matchesQuickFocus(account: Sub2PoolAccount, focus: AccountPoolFilterState["quickFocus"]) {
+  if (focus === "none") return true
+  if (focus === "debt") return accountBalanceTone(account) === "debt"
+  if (focus === "missing_multiplier") return isMissingMultiplier(account)
+  if (focus === "unhealthy") return accountHealthTone(account) !== "healthy"
+  if (focus === "priority_mismatch") return hasPriorityMismatch(account)
+  if (focus === "schedulable") return isSchedulable(account)
+  if (focus === "disabled") return !isSchedulable(account)
+  return true
+}
+
+/** 从当前筛选状态推导 KPI tile 激活态。 */
+function deriveActiveSummaryTile(filters: AccountPoolFilterState): AccountPoolSummaryTileKey | null {
+  const cleanSecondary =
+    filters.query === "" &&
+    filters.businessChannel === "all"
+
+  if (!cleanSecondary) return null
+
+  if (filters.quickFocus === "debt" && filters.viewMode === "problems") return "debt"
+  if (filters.quickFocus === "missing_multiplier") return "missing_multiplier"
+  if (
+    filters.viewMode === "problems" &&
+    filters.quickFocus === "none" &&
+    filters.schedule === "all" &&
+    filters.health === "all" &&
+    filters.missing === "all"
+  ) {
+    return "problems"
+  }
+  if (
+    filters.viewMode === "all" &&
+    filters.quickFocus === "none" &&
+    filters.schedule === "schedulable" &&
+    filters.health === "all" &&
+    filters.missing === "all"
+  ) {
+    return "schedulable"
+  }
+  if (
+    filters.viewMode === "all" &&
+    filters.quickFocus === "none" &&
+    filters.schedule === "all" &&
+    filters.health === "healthy" &&
+    filters.missing === "all"
+  ) {
+    return "healthy"
+  }
+  if (
+    filters.viewMode === "all" &&
+    filters.quickFocus === "none" &&
+    filters.schedule === "all" &&
+    filters.health === "all" &&
+    filters.missing === "all"
+  ) {
+    return "total"
+  }
+  return null
+}
+
+function filtersForSummaryTile(
+  key: AccountPoolSummaryTileKey,
+  current: AccountPoolFilterState,
+): AccountPoolFilterState {
+  const base: AccountPoolFilterState = {
+    ...current,
+    query: "",
+    businessChannel: "all",
+    schedule: "all",
+    health: "all",
+    missing: "all",
+    quickFocus: "none",
+  }
+  switch (key) {
+    case "total":
+      return { ...base, viewMode: "all" }
+    case "problems":
+      return { ...base, viewMode: "problems" }
+    case "schedulable":
+      return { ...base, viewMode: "all", schedule: "schedulable" }
+    case "healthy":
+      return { ...base, viewMode: "all", health: "healthy" }
+    case "debt":
+      return { ...base, viewMode: "problems", quickFocus: "debt" }
+    case "missing_multiplier":
+      return {
+        ...base,
+        viewMode: "problems",
+        quickFocus: "missing_multiplier",
+        missing: "multiplier",
+      }
+    default:
+      return base
+  }
 }
 
 function updateAccountInSnapshot(
@@ -136,7 +230,7 @@ export default function AccountPoolPage() {
   const automation = useSub2PoolAutomation(targetID)
   const { confirm, dialog: confirmDialog } = useConfirm()
 
-  const [filters, setFilters] = useState<AccountPoolFilterState>(defaultFilters)
+  const [filters, setFilters] = useState<AccountPoolFilterState>(defaultAccountPoolFilters)
   const [refreshing, setRefreshing] = useState(false)
   const [busyAccountID, setBusyAccountID] = useState<number | null>(null)
   const [preview, setPreview] = useState<Sub2PoolPriorityPreviewResponse | null>(null)
@@ -184,9 +278,21 @@ export default function AccountPoolPage() {
     return Array.from(seen).sort((a, b) => a.localeCompare(b, "zh-CN"))
   }, [accounts])
 
+  const problemCount = useMemo(
+    () => accounts.filter(isProblemAccount).length,
+    [accounts],
+  )
+
+  const activeSummaryTile = useMemo(() => deriveActiveSummaryTile(filters), [filters])
+
   const filteredAccounts = useMemo(() => {
     const query = filters.query.trim().toLowerCase()
     const filtered = accounts.filter((account) => {
+      // 1) 问题视图优先
+      if (filters.viewMode === "problems" && !isProblemAccount(account)) return false
+      // 2) KPI quickFocus
+      if (!matchesQuickFocus(account, filters.quickFocus)) return false
+
       if (query) {
         const haystack = [
           String(account.id),
@@ -216,7 +322,15 @@ export default function AccountPoolPage() {
       if (filters.health !== "all" && accountHealthTone(account) !== filters.health) return false
       return matchesMissingFilter(account, filters.missing)
     })
-    return filtered.sort((a, b) => compareAccounts(a, b, filters.sort))
+    return filtered.sort((a, b) => {
+      // 问题视图下欠费优先，再走既有排序
+      if (filters.viewMode === "problems") {
+        const aDebt = accountBalanceTone(a) === "debt" ? 0 : 1
+        const bDebt = accountBalanceTone(b) === "debt" ? 0 : 1
+        if (aDebt !== bDebt) return aDebt - bDebt
+      }
+      return compareAccounts(a, b, filters.sort)
+    })
   }, [accounts, filters])
 
   useEffect(() => {
@@ -456,10 +570,13 @@ export default function AccountPoolPage() {
         targets={targets.data ?? []}
         selectedTargetID={targetID}
         summary={summary}
+        problemCount={problemCount}
+        activeTile={activeSummaryTile}
         refreshedAt={currentSnapshot?.refreshed_at}
         loading={refreshing || snapshot.loading || targetChanging}
         onTargetChange={setTargetID}
         onRefresh={() => void handleRefresh()}
+        onTileClick={(key) => setFilters((current) => filtersForSummaryTile(key, current))}
       />
 
       {snapshot.error && currentSnapshot ? (
@@ -479,6 +596,7 @@ export default function AccountPoolPage() {
         businessChannels={businessChannels}
         resultCount={filteredAccounts.length}
         totalCount={accounts.length}
+        problemCount={problemCount}
         onChange={setFilters}
       />
 
@@ -530,7 +648,7 @@ export default function AccountPoolPage() {
             <EmptyTitle>没有匹配账号</EmptyTitle>
             <EmptyDescription>调整搜索词或筛选条件后重试。</EmptyDescription>
           </EmptyHeader>
-          <Button type="button" variant="outline" onClick={() => setFilters(defaultFilters)}>
+          <Button type="button" variant="outline" onClick={() => setFilters(defaultAccountPoolFilters)}>
             清空筛选
           </Button>
         </Empty>
