@@ -182,6 +182,7 @@ type AccountSnapshot struct {
 	GroupIDs           []int64       `json:"group_ids"`
 	LowestGroups       []GroupRef    `json:"lowest_groups"`
 	Channel            string        `json:"channel"`
+	UpstreamURL        string        `json:"upstream_url,omitempty"`
 	UpstreamRate       *float64      `json:"upstream_rate,omitempty"`
 	Balance            *float64      `json:"balance,omitempty"`
 	TodayStats         TodayStats    `json:"today_stats"`
@@ -190,7 +191,10 @@ type AccountSnapshot struct {
 	SkipReason         string        `json:"skip_reason,omitempty"`
 	MatchStatus        string        `json:"match_status"`
 	FingerprintState   string        `json:"fingerprint_state"`
-	IdentityDigest     string        `json:"-"`
+	// MultiplierSource: key_exact | account_mapping | display_only | ""
+	// Key 精确匹配才算可信；其余有倍率也只是展示兜底。
+	MultiplierSource string `json:"multiplier_source,omitempty"`
+	IdentityDigest   string `json:"-"`
 }
 
 type GroupRef struct {

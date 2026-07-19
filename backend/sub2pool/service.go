@@ -1270,6 +1270,7 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 			GroupIDs:           append([]int64(nil), account.GroupIDs...),
 			LowestGroups:       lowest,
 			Channel:            channel,
+			UpstreamURL:        strings.TrimSpace(identity.BaseURL),
 			UpstreamRate:       cloneFloat(match.rate),
 			Balance:            cloneFloat(match.balance),
 			TodayStats: TodayStats{
@@ -1278,7 +1279,8 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 				Available: raw.Stats.TodayRequests != nil || raw.Stats.TodayCost != nil,
 			},
 			Availability: Availability{
-				Matched:          match.matched,
+				// 仅 Key 精确匹配算 matched；名/映射/URL 兜底不得冒充可信对齐。
+				Matched:          match.matched && match.status == "key_exact",
 				BalanceAvailable: match.balance != nil,
 				TodayStatsReady:  raw.Stats.TodayRequests != nil || raw.Stats.TodayCost != nil,
 				RateAvailable:    match.rate != nil,
@@ -1288,9 +1290,10 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 				TemporarilyUnschedulable: raw.Health.TemporarilyUnschedulable,
 				Overloaded:               raw.Health.Overloaded,
 			},
-			MatchStatus:      match.status,
-			FingerprintState: fingerprintState,
-			IdentityDigest:   identityStateDigest,
+			MatchStatus:        match.status,
+			FingerprintState:   fingerprintState,
+			MultiplierSource:   poolMultiplierSource(match.status, match.rate != nil),
+			IdentityDigest:     identityStateDigest,
 		}
 		item.Availability.Healthy = item.Schedulable &&
 			item.Availability.Matched &&
@@ -1338,6 +1341,21 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 // and must still apply when fingerprint matching misses.
 func allowsAccountRateMapping(match upstreamMatch) bool {
 	return match.status != "key_ambiguous"
+}
+
+// poolMultiplierSource 标明倍率可信度：仅 key_exact 为精确；其它有值也只是展示兜底。
+func poolMultiplierSource(matchStatus string, hasRate bool) string {
+	if !hasRate {
+		return ""
+	}
+	switch matchStatus {
+	case "key_exact":
+		return "key_exact"
+	case "account_mapping":
+		return "account_mapping"
+	default:
+		return "display_only"
+	}
 }
 
 func lowestGroups(ids []int64, groups map[int64]GroupSnapshot) []GroupRef {

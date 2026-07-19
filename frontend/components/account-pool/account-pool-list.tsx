@@ -4,12 +4,14 @@ import {
   ArrowUp,
   ArrowUpDown,
   CheckCircle2,
+  ExternalLink,
   PauseCircle,
   ShieldAlert,
   ShieldCheck,
   TimerReset,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
 import {
@@ -20,6 +22,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import type { Sub2PoolAccount } from "@/lib/api-types"
 import { cn } from "@/lib/utils"
 import type { AccountPoolSort } from "./account-pool-filters"
@@ -31,8 +38,11 @@ import {
   accountGroupLabel,
   accountHealthLabel,
   accountHealthTone,
+  accountMatchLabel,
+  accountMatchTone,
   accountMissingLabels,
   accountMultiplierLabel,
+  accountMultiplierSourceLabel,
   accountSchedulableLabel,
   formatNumeric,
   isSchedulable,
@@ -166,8 +176,42 @@ function AccountCore({
               {accountGroupLabel(account)}
             </span>
           </div>
+          {account.upstream_url ? (
+            <a
+              href={account.upstream_url}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1 flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+              title={account.upstream_url}
+            >
+              <ExternalLink className="size-3 shrink-0" />
+              <span className="truncate">{account.upstream_url.replace(/^https?:\/\//, "")}</span>
+            </a>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-8"
+                asChild={Boolean(account.upstream_url)}
+                disabled={!account.upstream_url}
+                aria-label={`打开 ${account.name} 上游网页`}
+              >
+                {account.upstream_url ? (
+                  <a href={account.upstream_url} target="_blank" rel="noreferrer">
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                ) : (
+                  <ExternalLink className="size-3.5" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>打开上游网页</TooltipContent>
+          </Tooltip>
           <span className="text-[11px] text-muted-foreground">调度</span>
           <Switch
             checked={isSchedulable(account)}
@@ -196,6 +240,7 @@ function AccountCore({
           <div className="mt-0.5 font-semibold tabular-nums">
             {accountMultiplierLabel(account)}
           </div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground">{accountMultiplierSourceLabel(account)}</div>
         </div>
         <div className="rounded-md border border-border bg-muted/20 px-2 py-1.5">
           <div className="text-[10px] text-muted-foreground">余额</div>
@@ -220,6 +265,12 @@ function AccountCore({
         </Badge>
       </div>
 
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[10px] text-muted-foreground">匹配：</span>
+        <Badge variant="outline" className={smallBadgeTone(accountMatchTone(account))}>
+          {accountMatchLabel(account)}
+        </Badge>
+      </div>
       <AccountHealthIcons account={account} />
       <AccountMissingChips account={account} />
       {account.schedulable_reason ? (
@@ -275,7 +326,7 @@ export function AccountPoolDesktopTable({
               sortKey="upstream_multiplier"
               sort={sort}
               onToggle={onSortChange}
-              className="w-24"
+              className="w-28"
             />
             <SortableHead
               label="余额"
@@ -284,21 +335,35 @@ export function AccountPoolDesktopTable({
               onToggle={onSortChange}
               className="w-24"
             />
+            <TableHead className="w-36">匹配精度</TableHead>
             <TableHead className="w-28">健康 / 限流</TableHead>
             <TableHead className="w-28">今日请求 / 并发</TableHead>
-            <TableHead className="w-20 text-right">调度</TableHead>
+            <TableHead className="w-24 text-right">操作</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {accounts.map((account) => {
             const balanceTone = accountBalanceTone(account)
             const healthTone = accountHealthTone(account)
+            const matchTone = accountMatchTone(account)
             return (
               <TableRow key={account.id}>
                 <TableCell className="max-w-0">
                   <div className="min-w-0">
                     <div className="truncate font-medium">{account.name}</div>
                     <div className="text-[11px] text-muted-foreground">#{account.id}</div>
+                    {account.upstream_url ? (
+                      <a
+                        href={account.upstream_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+                        title={account.upstream_url}
+                      >
+                        <ExternalLink className="size-3 shrink-0" />
+                        <span className="truncate">{account.upstream_url.replace(/^https?:\/\//, "")}</span>
+                      </a>
+                    ) : null}
                   </div>
                 </TableCell>
                 <TableCell className="text-[11px] text-muted-foreground">
@@ -324,11 +389,20 @@ export function AccountPoolDesktopTable({
                 >
                   {formatNumeric(account.suggested_priority)}
                 </TableCell>
-                <TableCell className="font-mono text-[12px] tabular-nums">
-                  {accountMultiplierLabel(account)}
+                <TableCell className="text-[11px]">
+                  <div className="font-mono text-[12px] tabular-nums">{accountMultiplierLabel(account)}</div>
+                  <div className="text-muted-foreground">{accountMultiplierSourceLabel(account)}</div>
                 </TableCell>
                 <TableCell className={cn("font-mono text-[12px] tabular-nums", balanceTone === "debt" && "text-danger", balanceTone === "low" && "text-warning")}>
                   {accountBalanceValueLabel(account)}
+                </TableCell>
+                <TableCell className="text-[11px]">
+                  <span
+                    className={cn("inline-flex max-w-full items-center rounded-md border px-2 py-0.5 text-[10px]", toneClass(matchTone))}
+                    title={accountMatchLabel(account)}
+                  >
+                    {accountMatchLabel(account)}
+                  </span>
                 </TableCell>
                 <TableCell className="text-[11px]">
                   <div className="flex flex-col gap-1">
@@ -355,12 +429,36 @@ export function AccountPoolDesktopTable({
                   </div>
                 </TableCell>
                 <TableCell className="text-right">
-                  <Switch
-                    checked={isSchedulable(account)}
-                    onCheckedChange={(next) => onToggleSchedulable(account, next)}
-                    disabled={busyAccountID === account.id}
-                    aria-label={`${isSchedulable(account) ? "暂停" : "恢复"} ${account.name} 调度`}
-                  />
+                  <div className="inline-flex items-center justify-end gap-1.5">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="size-8"
+                          asChild={Boolean(account.upstream_url)}
+                          disabled={!account.upstream_url}
+                          aria-label={`打开 ${account.name} 上游网页`}
+                        >
+                          {account.upstream_url ? (
+                            <a href={account.upstream_url} target="_blank" rel="noreferrer">
+                              <ExternalLink className="size-3.5" />
+                            </a>
+                          ) : (
+                            <ExternalLink className="size-3.5" />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>打开上游网页</TooltipContent>
+                    </Tooltip>
+                    <Switch
+                      checked={isSchedulable(account)}
+                      onCheckedChange={(next) => onToggleSchedulable(account, next)}
+                      disabled={busyAccountID === account.id}
+                      aria-label={`${isSchedulable(account) ? "暂停" : "恢复"} ${account.name} 调度`}
+                    />
+                  </div>
                 </TableCell>
               </TableRow>
             )

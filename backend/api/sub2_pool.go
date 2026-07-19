@@ -97,26 +97,31 @@ type sub2PoolSnapshotSummaryDTO struct {
 }
 
 type sub2PoolAccountDTO struct {
-	ID                 int64     `json:"id"`
-	Name               string    `json:"name"`
-	Platform           string    `json:"platform"`
-	Type               string    `json:"type"`
-	BusinessChannel    string    `json:"business_channel,omitempty"`
-	MinGroup           string    `json:"min_group,omitempty"`
-	CurrentPriority    int       `json:"current_priority"`
-	SuggestedPriority  *int      `json:"suggested_priority,omitempty"`
-	UpstreamMultiplier *float64  `json:"upstream_multiplier,omitempty"`
-	Balance            *float64  `json:"balance,omitempty"`
-	BalanceStatus      string    `json:"balance_status"`
-	HealthStatus       string    `json:"health_status"`
-	RateLimitStatus    string    `json:"rate_limit_status,omitempty"`
-	Schedulable        bool      `json:"schedulable"`
-	SchedulableReason  string    `json:"schedulable_reason,omitempty"`
-	TodayRequests      *int      `json:"today_requests,omitempty"`
-	CurrentConcurrency int       `json:"current_concurrency"`
-	MaxConcurrency     int       `json:"max_concurrency"`
-	MissingData        []string  `json:"missing_data"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                   int64     `json:"id"`
+	Name                 string    `json:"name"`
+	Platform             string    `json:"platform"`
+	Type                 string    `json:"type"`
+	BusinessChannel      string    `json:"business_channel,omitempty"`
+	MinGroup             string    `json:"min_group,omitempty"`
+	UpstreamURL          string    `json:"upstream_url,omitempty"`
+	CurrentPriority      int       `json:"current_priority"`
+	SuggestedPriority    *int      `json:"suggested_priority,omitempty"`
+	UpstreamMultiplier   *float64  `json:"upstream_multiplier,omitempty"`
+	MultiplierSource     string    `json:"multiplier_source,omitempty"`
+	MultiplierConfidence string    `json:"multiplier_confidence,omitempty"`
+	Balance              *float64  `json:"balance,omitempty"`
+	BalanceStatus        string    `json:"balance_status"`
+	HealthStatus         string    `json:"health_status"`
+	RateLimitStatus      string    `json:"rate_limit_status,omitempty"`
+	Schedulable          bool      `json:"schedulable"`
+	SchedulableReason    string    `json:"schedulable_reason,omitempty"`
+	TodayRequests        *int      `json:"today_requests,omitempty"`
+	CurrentConcurrency   int       `json:"current_concurrency"`
+	MaxConcurrency       int       `json:"max_concurrency"`
+	MissingData          []string  `json:"missing_data"`
+	MatchStatus          string    `json:"match_status,omitempty"`
+	FingerprintState     string    `json:"fingerprint_state,omitempty"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 func getSub2PoolSnapshot(c *gin.Context, service Sub2PoolService, targets sub2PoolTargetLister) {
@@ -197,31 +202,47 @@ func snapshotDTO(snapshot *sub2pool.Snapshot, preview *sub2pool.PriorityPreview,
 
 func accountDTO(account sub2pool.AccountSnapshot, suggestions map[int64]int, updatedAt time.Time) sub2PoolAccountDTO {
 	item := sub2PoolAccountDTO{
-		ID:                 account.ID,
-		Name:               account.Name,
-		Platform:           account.Platform,
-		Type:               account.Type,
-		BusinessChannel:    account.Channel,
-		MinGroup:           groupNames(account.LowestGroups),
-		CurrentPriority:    account.CurrentPriority,
-		UpstreamMultiplier: clonePoolFloat(account.UpstreamRate),
-		Balance:            clonePoolFloat(account.Balance),
-		BalanceStatus:      poolBalanceStatus(account.Balance),
-		HealthStatus:       poolHealthStatus(account),
-		RateLimitStatus:    poolRateLimitStatus(account),
-		Schedulable:        account.Schedulable,
-		SchedulableReason:  account.SkipReason,
-		TodayRequests:      clonePoolInt(account.TodayStats.Requests),
-		CurrentConcurrency: account.CurrentConcurrency,
-		MaxConcurrency:     account.MaxConcurrency,
-		MissingData:        poolMissingData(account),
-		UpdatedAt:          updatedAt,
+		ID:                   account.ID,
+		Name:                 account.Name,
+		Platform:             account.Platform,
+		Type:                 account.Type,
+		BusinessChannel:      account.Channel,
+		MinGroup:             groupNames(account.LowestGroups),
+		UpstreamURL:          strings.TrimSpace(account.UpstreamURL),
+		CurrentPriority:      account.CurrentPriority,
+		UpstreamMultiplier:   clonePoolFloat(account.UpstreamRate),
+		MultiplierSource:     account.MultiplierSource,
+		MultiplierConfidence: poolMultiplierConfidence(account),
+		Balance:              clonePoolFloat(account.Balance),
+		BalanceStatus:        poolBalanceStatus(account.Balance),
+		HealthStatus:         poolHealthStatus(account),
+		RateLimitStatus:      poolRateLimitStatus(account),
+		Schedulable:          account.Schedulable,
+		SchedulableReason:    account.SkipReason,
+		TodayRequests:        clonePoolInt(account.TodayStats.Requests),
+		CurrentConcurrency:   account.CurrentConcurrency,
+		MaxConcurrency:       account.MaxConcurrency,
+		MissingData:          poolMissingData(account),
+		MatchStatus:          account.MatchStatus,
+		FingerprintState:     account.FingerprintState,
+		UpdatedAt:            updatedAt,
 	}
 	if priority, exists := suggestions[account.ID]; exists {
 		value := priority
 		item.SuggestedPriority = &value
 	}
 	return item
+}
+
+// poolMultiplierConfidence：仅 API Key 精确匹配为 trusted；其余有倍率也是 display_only。
+func poolMultiplierConfidence(account sub2pool.AccountSnapshot) string {
+	if account.UpstreamRate == nil {
+		return "missing"
+	}
+	if account.MatchStatus == "key_exact" {
+		return "trusted"
+	}
+	return "display_only"
 }
 
 func groupNames(groups []sub2pool.GroupRef) string {

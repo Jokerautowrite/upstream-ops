@@ -31,6 +31,63 @@ export function accountGroupLabel(account: Sub2PoolAccount) {
   return `${group} / ${channel}`
 }
 
+/** 匹配精准度文案：Key 精确才是可信，其余一律标明非 Key。 */
+export function accountMatchLabel(account: Sub2PoolAccount) {
+  switch (account.match_status) {
+    case "key_exact":
+      return "API Key 精确匹配"
+    case "account_mapping":
+      return "账号映射（非 Key）"
+    case "channel_name_exact":
+      return "渠道名匹配（非 Key）"
+    case "group_name_exact":
+      return "分组名匹配（非 Key）"
+    case "key_mismatch":
+      return "API Key 不一致"
+    case "key_ambiguous":
+      return "API Key 匹配不唯一"
+    case "fingerprint_missing":
+      return "Sub2 未提供 Key 指纹"
+    case "upstream_unavailable":
+      return "上游 Key 采集不可用"
+    case "url_missing":
+      return "上游地址缺失"
+    case "refresh_pending":
+      return "等待下次扫描"
+    default:
+      return account.match_status?.trim() || "未匹配"
+  }
+}
+
+export function accountMatchTone(account: Sub2PoolAccount): AccountPoolHealthTone {
+  switch (account.match_status) {
+    case "key_exact":
+      return "healthy"
+    case "account_mapping":
+    case "channel_name_exact":
+    case "group_name_exact":
+      return "warning"
+    case "key_mismatch":
+    case "key_ambiguous":
+    case "upstream_unavailable":
+    case "fingerprint_missing":
+    case "url_missing":
+      return "failed"
+    default:
+      return "unknown"
+  }
+}
+
+/** 倍率旁的来源标签：可信 / 映射 / 仅展示 */
+export function accountMultiplierSourceLabel(account: Sub2PoolAccount) {
+  if (account.multiplier_confidence === "trusted" || account.multiplier_source === "key_exact") {
+    return "Key 可信"
+  }
+  if (account.multiplier_source === "account_mapping") return "映射（非 Key）"
+  if (account.upstream_multiplier == null) return "待映射"
+  return "仅展示（非 Key）"
+}
+
 export function formatNumeric(value: number | null | undefined, fallback = "—") {
   if (value == null || !Number.isFinite(value)) return fallback
   return value.toLocaleString("zh-CN")
