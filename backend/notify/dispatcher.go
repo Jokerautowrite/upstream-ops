@@ -99,7 +99,8 @@ func (d *Dispatcher) Send(ctx context.Context, ch *storage.NotificationChannel, 
 // 订阅过滤：渠道配置 Subscriptions 非空时，必须有任意一条订阅命中 msg 才发送；
 // 空订阅列表（""/null/[]）视为"订阅一切"，向后兼容已有通知渠道。
 //
-// 去抖：balance_low 同渠道在 BalanceLowCooldown 内不重复推送，状态在数据库里持久化。
+// 去抖：balance_low / login_failed 等同渠道事件在对应 Cooldown 内不重复推送，
+// 状态在数据库里持久化。
 // 失败：按 SendMaxAttempts 进行指数退避重试。
 func (d *Dispatcher) Dispatch(ctx context.Context, msg Message) error {
 	if d.suppress(msg) {
@@ -234,6 +235,8 @@ func (d *Dispatcher) suppress(msg Message) bool {
 	switch msg.Event {
 	case storage.EventBalanceLow:
 		cooldown = policy.BalanceLowCooldown
+	case storage.EventLoginFailed:
+		cooldown = policy.LoginFailedCooldown
 	case storage.EventSubscriptionDailyLow, storage.EventSubscriptionWeeklyLow, storage.EventSubscriptionMonthlyLow, storage.EventSubscriptionExpiring:
 		cooldown = policy.SubscriptionAlertCooldown
 	default:

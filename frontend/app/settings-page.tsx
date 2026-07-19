@@ -782,6 +782,28 @@ export default function SettingsPage() {
                 />
               </Field>
               <Field
+                label="登录失败冷却分钟"
+                description="同一渠道 login_failed 重复推送的抑制时间；0 为不冷却。"
+              >
+                <Input
+                  type="number"
+                  value={String(form.notifications.loginFailedCooldownMinutes ?? 360)}
+                  onChange={(e) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            notifications: {
+                              ...prev.notifications,
+                              loginFailedCooldownMinutes: num(e.target.value),
+                            },
+                          }
+                        : prev,
+                    )
+                  }
+                />
+              </Field>
+              <Field
                 label="每日剩余提醒百分比"
                 description="Sub2API 订阅每日剩余额度低于该百分比时提醒，0 为关闭。"
               >

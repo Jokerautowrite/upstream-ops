@@ -13,12 +13,14 @@ import (
 //   - BatchRateChanges：同次扫描中合并多条倍率相关通知
 //   - MinChangePct：涨跌幅小于阈值时跳过推送（仍写入 RateChangeLog 表）
 //   - BalanceLowCooldown：同渠道 balance_low 在窗口内不重复发送
+//   - LoginFailedCooldown：同渠道 login_failed 在窗口内不重复发送
 //   - SendMaxAttempts：单条消息最多发送尝试次数（含首发），<=1 表示不重试
 type Policy struct {
 	NotificationPrefix                       string
 	BatchRateChanges                         bool
 	MinChangePct                             float64
 	BalanceLowCooldown                       time.Duration
+	LoginFailedCooldown                      time.Duration
 	SubscriptionDailyRemainingThresholdPct   float64
 	SubscriptionWeeklyRemainingThresholdPct  float64
 	SubscriptionMonthlyRemainingThresholdPct float64

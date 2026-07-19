@@ -149,6 +149,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 			BatchRateChanges:                         cfg.Notifications.BatchRateChanges,
 			MinChangePct:                             cfg.Notifications.MinChangePct,
 			BalanceLowCooldown:                       time.Duration(cfg.Notifications.BalanceLowCooldownMinutes) * time.Minute,
+			LoginFailedCooldown:                      time.Duration(cfg.Notifications.LoginFailedCooldownMinutes) * time.Minute,
 			SubscriptionDailyRemainingThresholdPct:   cfg.Notifications.SubscriptionDailyRemainingThresholdPct,
 			SubscriptionWeeklyRemainingThresholdPct:  cfg.Notifications.SubscriptionWeeklyRemainingThresholdPct,
 			SubscriptionMonthlyRemainingThresholdPct: cfg.Notifications.SubscriptionMonthlyRemainingThresholdPct,

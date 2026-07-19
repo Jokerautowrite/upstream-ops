@@ -110,12 +110,16 @@ type RetentionConfig struct {
 //   - BalanceLowCooldownMinutes：同一渠道的 balance_low 在 X 分钟内不重复推送。
 //     0 = 不冷却（每次扫描发现仍 < 阈值都发）。冷却状态持久化在数据库的
 //     notification_cooldowns 表，跨重启生效。
+//   - LoginFailedCooldownMinutes：同一渠道的 login_failed 在 X 分钟内不重复推送。
+//     余额/倍率扫描都会先登录，无冷却时一次坏账密会在一轮内连发多条。
+//     0 = 不冷却。默认 360（6 小时）。
 //   - SendMaxAttempts：单条通知发送失败时最多尝试次数（含首次）。
 //     1 = 不重试。重试采用指数退避：1s / 2s / 4s …，上限 30s。
 type NotificationsConfig struct {
 	BatchRateChanges                         bool    `mapstructure:"batchRateChanges" yaml:"batchRateChanges" json:"batchRateChanges"`
 	MinChangePct                             float64 `mapstructure:"minChangePct" yaml:"minChangePct" json:"minChangePct"`
 	BalanceLowCooldownMinutes                int     `mapstructure:"balanceLowCooldownMinutes" yaml:"balanceLowCooldownMinutes" json:"balanceLowCooldownMinutes"`
+	LoginFailedCooldownMinutes                int     `mapstructure:"loginFailedCooldownMinutes" yaml:"loginFailedCooldownMinutes" json:"loginFailedCooldownMinutes"`
 	SubscriptionDailyRemainingThresholdPct   float64 `mapstructure:"subscriptionDailyRemainingThresholdPct" yaml:"subscriptionDailyRemainingThresholdPct" json:"subscriptionDailyRemainingThresholdPct"`
 	SubscriptionWeeklyRemainingThresholdPct  float64 `mapstructure:"subscriptionWeeklyRemainingThresholdPct" yaml:"subscriptionWeeklyRemainingThresholdPct" json:"subscriptionWeeklyRemainingThresholdPct"`
 	SubscriptionMonthlyRemainingThresholdPct float64 `mapstructure:"subscriptionMonthlyRemainingThresholdPct" yaml:"subscriptionMonthlyRemainingThresholdPct" json:"subscriptionMonthlyRemainingThresholdPct"`
@@ -324,6 +328,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("notifications.batchRateChanges", true)
 	v.SetDefault("notifications.minChangePct", 0)
 	v.SetDefault("notifications.balanceLowCooldownMinutes", 60)
+	v.SetDefault("notifications.loginFailedCooldownMinutes", 360)
 	v.SetDefault("notifications.subscriptionDailyRemainingThresholdPct", 0)
 	v.SetDefault("notifications.subscriptionWeeklyRemainingThresholdPct", 0)
 	v.SetDefault("notifications.subscriptionMonthlyRemainingThresholdPct", 0)
