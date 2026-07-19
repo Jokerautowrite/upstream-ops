@@ -723,6 +723,78 @@ func TestSubscriptionUsageAlertsAndCooldown(t *testing.T) {
 	}
 }
 
+// 定时扫描先 List 再串行采集：若期间渠道改成 token 模式，prepare 必须重读库，
+// 否则会拿着旧 password 模式去 Login（Turnstile 站点会失败）。
+func TestPrepareReloadsCredentialModeFromDB(t *testing.T) {
+	db := openTestDB(t)
+	channels := storage.NewChannels(db)
+	authSessions := storage.NewAuthSessions(db)
+	captchas := storage.NewCaptchas(db)
+	announcements := storage.NewUpstreamAnnouncements(db)
+	rates := storage.NewRates(db)
+	monitorLogs := storage.NewMonitorLogs(db)
+	notifies := storage.NewNotifications(db)
+	cipher, err := crypto.NewCipher("monitor-prepare-reload-secret")
+	if err != nil {
+		t.Fatalf("cipher: %v", err)
+	}
+
+	var sawLogin atomic.Bool
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/user/login":
+			sawLogin.Store(true)
+			_, _ = w.Write([]byte(`{"success":false,"message":"Turnstile token 为空"}`))
+		case "/api/status":
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"quota_per_unit":500000,"price":1,"turnstile_check":true}}`))
+		case "/api/user/self":
+			if r.Header.Get("Authorization") == "" && r.Header.Get("Cookie") == "" {
+				http.Error(w, `{"success":false,"message":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"quota":1000000,"used_quota":0}}`))
+		case "/api/log/self/stat":
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"quota":0}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer apiSrv.Close()
+
+	// DB 里已经是 token 模式；调用方手里仍是旧的 password 快照。
+	ch := &storage.Channel{
+		Name:           "token-site",
+		Type:           storage.ChannelTypeNewAPI,
+		SiteURL:        apiSrv.URL,
+		Username:       "u",
+		PasswordCipher: mustEncrypt(t, cipher, `{"access_token":"tok123456789012345678901234567","user_id":"7"}`),
+		CredentialMode: storage.CredentialModeToken,
+		MonitorEnabled: true,
+	}
+	if err := channels.Create(ch); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	stale := *ch
+	stale.CredentialMode = storage.CredentialModePassword
+	stale.PasswordCipher = mustEncrypt(t, cipher, "plaintext-password")
+
+	channelSvc := channel.NewService(channels, authSessions, captchas, rates, monitorLogs, cipher)
+	dispatcher := notify.NewDispatcher(notifies, cipher, slog.New(slog.NewTextHandler(io.Discard, nil)), notify.Policy{SendMaxAttempts: 1})
+	svc := NewService(channels, announcements, rates, monitorLogs, channelSvc, dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if err := svc.RefreshBalance(context.Background(), &stale); err != nil {
+		t.Fatalf("refresh with stale password snapshot: %v", err)
+	}
+	if sawLogin.Load() {
+		t.Fatal("must not password-login when DB credential_mode is token")
+	}
+	if stale.CredentialMode != storage.CredentialModeToken {
+		t.Fatalf("stale channel not reloaded: mode=%q", stale.CredentialMode)
+	}
+}
+
 func mustEncrypt(t *testing.T, cipher *crypto.Cipher, plain string) string {
 	t.Helper()
 	out, err := cipher.Encrypt(plain)

@@ -84,7 +84,7 @@ func (s *Service) ScanAllRates(ctx context.Context) {
 func (s *Service) RefreshBalance(ctx context.Context, c *storage.Channel) error {
 	resolved, conn, session, err := s.prepare(ctx, c)
 	if err != nil {
-		s.notifyError(ctx, c, storage.EventLoginFailed, "登录失败", err)
+		s.notifyAuthFailure(ctx, c, err)
 		return err
 	}
 
@@ -156,7 +156,7 @@ func (s *Service) RefreshBalance(ctx context.Context, c *storage.Channel) error 
 func (s *Service) RefreshRates(ctx context.Context, c *storage.Channel) error {
 	resolved, conn, session, err := s.prepare(ctx, c)
 	if err != nil {
-		s.notifyError(ctx, c, storage.EventLoginFailed, "登录失败", err)
+		s.notifyAuthFailure(ctx, c, err)
 		return err
 	}
 
@@ -386,6 +386,16 @@ func formatDurationHours(d time.Duration) string {
 }
 
 func (s *Service) prepare(ctx context.Context, c *storage.Channel) (*connector.Channel, connector.Connector, *connector.AuthSession, error) {
+	// 批量/定时扫描会先 List 再串行采集。若期间用户把渠道改成 token 模式，
+	// 继续用快照会按旧 password 模式去 Login，站点开 Turnstile 时就会出现
+	// 「Turnstile token 为空」并把 last_error 打成失败。每次采集前重新读库。
+	if c != nil && c.ID != 0 && s.channels != nil {
+		fresh, err := s.channels.FindByID(c.ID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		*c = *fresh
+	}
 	resolved, err := s.channelSvc.Resolve(ctx, c)
 	if err != nil {
 		return nil, nil, nil, err
@@ -410,6 +420,15 @@ func (s *Service) notifyError(ctx context.Context, c *storage.Channel, event sto
 		Subject:   fmt.Sprintf("%s %s", c.Name, subject),
 		Body:      err.Error(),
 	})
+}
+
+// notifyAuthFailure：token 模式失败是凭据/鉴权问题，不是账号密码登录失败。
+func (s *Service) notifyAuthFailure(ctx context.Context, c *storage.Channel, err error) {
+	subject := "登录失败"
+	if c != nil && c.CredentialMode == storage.CredentialModeToken {
+		subject = "令牌鉴权失败"
+	}
+	s.notifyError(ctx, c, storage.EventLoginFailed, subject, err)
 }
 
 func (s *Service) syncAnnouncements(ctx context.Context, c *storage.Channel, resolved *connector.Channel, conn connector.Connector, session *connector.AuthSession) error {
