@@ -13,6 +13,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/channel"
 	"github.com/bejix/upstream-ops/backend/connector"
 	"github.com/bejix/upstream-ops/backend/crypto"
+	"github.com/bejix/upstream-ops/backend/gateway"
 	"github.com/bejix/upstream-ops/backend/notify"
 	"github.com/bejix/upstream-ops/backend/runtimeconfig"
 	"github.com/bejix/upstream-ops/backend/storage"
@@ -63,6 +64,11 @@ type Deps struct {
 	Monitor       monitorService
 	Dispatcher    *notify.Dispatcher
 	UpstreamSync  *syncer.Service
+	Gateway       *gateway.Service
+	GatewayGroups *storage.GatewayGroups
+	GatewayKeys   *storage.GatewayKeys
+	GatewayUsage  *storage.GatewayUsageLogs
+	ModelPrices   *storage.ModelPriceOverrides
 	Log           *slog.Logger
 
 	// Frontend 可选：传入嵌入的前端 dist 文件系统。nil 表示不挂载（本地开发用 vite dev server）。
@@ -84,6 +90,15 @@ func Register(r *gin.Engine, d *Deps) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	// 公开网关：/v1/*（不走管理端鉴权）。管理页 SPA 使用 /gateway，勿占用。
+	if d.Gateway != nil {
+		if d.Frontend != nil {
+			gateway.RegisterPublicWithoutRoot(r, d.Gateway)
+		} else {
+			gateway.RegisterPublic(r, d.Gateway)
+		}
+	}
+
 	api := r.Group("/api")
 	if d.Runtime != nil {
 		api.Use(d.Runtime.AuthMiddleware())
@@ -100,6 +115,7 @@ func Register(r *gin.Engine, d *Deps) {
 		registerDashboard(api, d)
 		registerSettings(api, d)
 		registerUpstreamSync(api, d)
+		registerGatewayAdmin(api, d)
 	}
 
 	if d.Frontend != nil {
@@ -121,8 +137,10 @@ func registerFrontend(r *gin.Engine, dist fs.FS) {
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 
-		// 永远不让 SPA fallback 覆盖 API / 健康检查路径。
-		if strings.HasPrefix(path, "/api/") || path == "/healthz" {
+		// 永远不让 SPA fallback 覆盖 API / 健康检查 / 公开转发路径。
+		// /gateway 是前端管理页，必须允许 SPA fallback。
+		if strings.HasPrefix(path, "/api/") || path == "/healthz" ||
+			strings.HasPrefix(path, "/v1/") || path == "/v1" {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}

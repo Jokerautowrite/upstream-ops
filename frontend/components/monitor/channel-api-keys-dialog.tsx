@@ -35,6 +35,7 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { apiFetch } from "@/lib/api"
+import { copyText as copyToClipboard } from "@/lib/clipboard"
 import { channelTypeLabel, dateTime, decimal, formatRatio } from "@/lib/format"
 import type {
   Channel,
@@ -238,29 +239,7 @@ function maskKey(key: string) {
 }
 
 async function copyText(text: string, label = "已复制") {
-  const writeClipboard = navigator.clipboard?.writeText?.bind(navigator.clipboard)
-  if (writeClipboard) {
-    try {
-      await writeClipboard(text)
-      toast.success(label)
-      return
-    } catch {
-      // 线上非安全上下文或权限受限时走下面的 textarea 兜底。
-    }
-  }
-
-  const textarea = document.createElement("textarea")
-  textarea.value = text
-  textarea.setAttribute("readonly", "")
-  textarea.style.position = "fixed"
-  textarea.style.left = "-9999px"
-  textarea.style.top = "0"
-  document.body.appendChild(textarea)
-  textarea.select()
-  textarea.setSelectionRange(0, text.length)
-  const copied = document.execCommand("copy")
-  document.body.removeChild(textarea)
-  if (!copied) throw new Error("复制失败")
+  await copyToClipboard(text)
   toast.success(label)
 }
 
@@ -495,7 +474,10 @@ export function ChannelAPIKeysDialog({
           if (created.id) {
             setRevealedKeys((prev) => ({ ...prev, [created.id]: created.key }))
           }
-          void copyText(created.key, "密钥已创建并复制")
+          void copyText(created.key, "密钥已创建并复制").catch((err: Error) => {
+            toast.success("密钥已创建")
+            toast.error(err?.message || "自动复制失败，请手动复制")
+          })
         }
       } else if (editing) {
         await apiFetch<ChannelAPIKey>(`/channels/${channel.id}/api-keys/${editing.id}`, {

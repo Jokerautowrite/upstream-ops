@@ -14,6 +14,7 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
+// Scheduler 周期性任务调度器。
 type Scheduler struct {
 	cfg           config.SchedulerConfig
 	log           *slog.Logger
@@ -27,6 +28,7 @@ type Scheduler struct {
 	captchas      *storage.Captchas
 	cipher        *crypto.Cipher
 	upstreamSync  upstreamSyncService
+	gatewayResort gatewayRateResortService
 	proxy         config.ProxyConfig
 }
 
@@ -34,6 +36,12 @@ type upstreamSyncService interface {
 	SyncAllOnRateScan(ctx context.Context)
 }
 
+// gatewayRateResortService 倍率扫描后重排开启了「渠道分组价格倍率重排」的网关组。
+type gatewayRateResortService interface {
+	ResortRoutesOnRateScan(ctx context.Context)
+}
+
+// New 构造调度器。
 func New(
 	cfg config.SchedulerConfig,
 	m *monitor.Service,
@@ -45,6 +53,7 @@ func New(
 	captchas *storage.Captchas,
 	cipher *crypto.Cipher,
 	upstreamSync upstreamSyncService,
+	gatewayResort gatewayRateResortService,
 	proxy config.ProxyConfig,
 	log *slog.Logger,
 ) *Scheduler {
@@ -61,10 +70,12 @@ func New(
 		captchas:      captchas,
 		cipher:        cipher,
 		upstreamSync:  upstreamSync,
+		gatewayResort: gatewayResort,
 		proxy:         proxy,
 	}
 }
 
+// Start 注册 cron 任务并启动。
 func (s *Scheduler) Start() error {
 	if s.cfg.BalanceCron != "" {
 		if _, err := s.cron.AddFunc(s.cfg.BalanceCron, s.runBalance); err != nil {
@@ -91,6 +102,7 @@ func (s *Scheduler) Start() error {
 	return nil
 }
 
+// Stop 停止调度器。
 func (s *Scheduler) Stop() {
 	if s.cron != nil {
 		<-s.cron.Stop().Done()
@@ -116,6 +128,9 @@ func (s *Scheduler) runRates() {
 	}
 	if s.upstreamSync != nil {
 		s.upstreamSync.SyncAllOnRateScan(ctx)
+	}
+	if s.gatewayResort != nil {
+		s.gatewayResort.ResortRoutesOnRateScan(ctx)
 	}
 }
 

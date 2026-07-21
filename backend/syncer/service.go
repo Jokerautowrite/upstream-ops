@@ -1,3 +1,4 @@
+// Package syncer 上游同步服务（公告/余额等相关任务）。
 package syncer
 
 import (
@@ -18,6 +19,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/connector/sub2api"
 	"github.com/bejix/upstream-ops/backend/crypto"
 	"github.com/bejix/upstream-ops/backend/notify"
+	"github.com/bejix/upstream-ops/backend/pkg/rateconvert"
 	"github.com/bejix/upstream-ops/backend/storage"
 )
 
@@ -2001,16 +2003,7 @@ func priorityForSourceGroup(syncGroup *storage.UpstreamSyncGroup, syncAccount *s
 }
 
 func convertRate(v float64, mode string, customValue float64) float64 {
-	switch strings.TrimSpace(mode) {
-	case "multiply_100":
-		return v * 100
-	case "divide_100":
-		return v / 100
-	case "custom":
-		return customValue
-	default:
-		return v
-	}
+	return rateconvert.Convert(v, mode, customValue)
 }
 
 func rateMultiplierForAccount(syncAccount *storage.UpstreamSyncAccount, groups []connector.APIKeyGroup) float64 {

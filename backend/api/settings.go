@@ -14,6 +14,7 @@ type settingsConfigView struct {
 	Notifications config.NotificationsConfig `json:"notifications"`
 	Proxy         config.ProxyConfig         `json:"proxy"`
 	Upstream      config.UpstreamConfig      `json:"upstream"`
+	Gateway       config.GatewayConfig       `json:"gateway"`
 }
 
 type settingsConfigInput struct {
@@ -23,6 +24,7 @@ type settingsConfigInput struct {
 	Notifications config.NotificationsConfig `json:"notifications" binding:"required"`
 	Proxy         config.ProxyConfig         `json:"proxy"`
 	Upstream      config.UpstreamConfig      `json:"upstream"`
+	Gateway       config.GatewayConfig       `json:"gateway"`
 }
 
 func registerSettings(g *gin.RouterGroup, d *Deps) {
@@ -48,7 +50,8 @@ func getSettingsConfig(c *gin.Context, d *Deps) {
 				Scheduler:     cfg.Scheduler,
 				Notifications: cfg.Notifications,
 				Proxy:         cfg.Proxy,
-				Upstream:      cfg.Upstream,
+				Upstream:      cfg.Upstream.WithDefaults(),
+				Gateway:       cfg.Gateway.WithDefaults(),
 			},
 		},
 	})
@@ -75,6 +78,7 @@ func saveSettingsConfig(c *gin.Context, d *Deps) {
 	cfg.Notifications = in.Notifications
 	cfg.Proxy = in.Proxy
 	cfg.Upstream = in.Upstream.WithDefaults()
+	cfg.Gateway = in.Gateway.WithDefaults()
 
 	if err := config.Save(path, cfg); err != nil {
 		fail(c, http.StatusInternalServerError, err)

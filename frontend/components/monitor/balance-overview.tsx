@@ -108,7 +108,7 @@ export function BalanceOverview() {
   const activeDot = isMobile ? { r: 4, strokeWidth: 0 } : { r: 5, strokeWidth: 0 }
 
   return (
-    <Card className="border border-border shadow-none lg:h-100">
+    <Card className="border border-border py-4 shadow-none lg:h-100 sm:py-6">
       <CardHeader className="flex shrink-0 flex-row items-center justify-between px-4 pb-2 sm:px-6">
         <CardTitle className="text-base font-semibold">{"余额概览"}</CardTitle>
         <span className="text-xs text-muted-foreground">{"最近 7 天"}</span>

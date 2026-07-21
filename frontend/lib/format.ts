@@ -44,6 +44,58 @@ export function dateTime(iso?: string | null): string {
   })
 }
 
+/** 完整本地时间，如 2026/07/14 01:47:18 */
+export function fullDateTime(iso?: string | null): string {
+  if (!iso) return "—"
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return "—"
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  const h = String(d.getHours()).padStart(2, "0")
+  const min = String(d.getMinutes()).padStart(2, "0")
+  const s = String(d.getSeconds()).padStart(2, "0")
+  return `${y}/${m}/${day} ${h}:${min}:${s}`
+}
+
+/** 毫秒 → 可读延迟，如 7.98s / 52.95s / 120ms */
+export function formatDurationMS(ms?: number | null): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return "—"
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  return `${(ms / 1000).toFixed(2)}s`
+}
+
+/**
+ * Token 数量格式化（对齐 sub2api formatTokensK）：
+ *   >= 1_000_000 → "3.5M"
+ *   >= 1_000     → "1.2K"
+ *   其它         → "950"
+ */
+export function formatTokens(n?: number | null): string {
+  if (n == null || !Number.isFinite(n)) return "0"
+  const tokens = Math.round(n)
+  const abs = Math.abs(tokens)
+  if (abs >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
+  if (abs >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`
+  return String(tokens)
+}
+
+/**
+ * 大数字紧凑格式（对齐 sub2api formatCompactNumber）：K / M / B
+ */
+export function formatCompactNumber(
+  n?: number | null,
+  options?: { allowBillions?: boolean },
+): string {
+  if (n == null || !Number.isFinite(n)) return "0"
+  const abs = Math.abs(n)
+  const allowBillions = options?.allowBillions !== false
+  if (allowBillions && abs >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
+  if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(Math.round(n))
+}
+
 /** 货币格式：$1,234.56。 */
 export function money(value: number | null | undefined, opts?: { precise?: boolean }) {
   if (value == null || !Number.isFinite(value)) return "—"

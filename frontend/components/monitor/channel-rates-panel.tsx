@@ -110,7 +110,7 @@ export function ChannelRatesPanel() {
   const list = channels ?? []
 
   return (
-    <Card className="border border-border shadow-none">
+    <Card className="border border-border py-4 shadow-none sm:py-6">
       <CardHeader className="flex flex-row items-baseline justify-between pb-2">
         <CardTitle className="text-base font-semibold">{"分组倍率"}</CardTitle>
         <span className="text-xs text-muted-foreground">

@@ -1,3 +1,4 @@
+// Package runtimeconfig 管理可热更新的运行时配置。
 package runtimeconfig
 
 import (
@@ -9,6 +10,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/auth"
 	"github.com/bejix/upstream-ops/backend/channel"
 	"github.com/bejix/upstream-ops/backend/config"
+	"github.com/bejix/upstream-ops/backend/gateway"
 	"github.com/bejix/upstream-ops/backend/notify"
 	"github.com/bejix/upstream-ops/backend/scheduler"
 	"github.com/gin-gonic/gin"
@@ -23,11 +25,13 @@ type Manager struct {
 	log              *slog.Logger
 	dispatcher       *notify.Dispatcher
 	channelSvc       *channel.Service
+	gatewaySvc       *gateway.Service
 	schedulerFactory SchedulerFactory
 	auth             *auth.Service
 	scheduler        *scheduler.Scheduler
 	proxyConfig      config.ProxyConfig
 	upstreamConfig   config.UpstreamConfig
+	gatewayConfig    config.GatewayConfig
 }
 
 type ApplyResult struct {
@@ -41,10 +45,12 @@ func New(
 	log *slog.Logger,
 	dispatcher *notify.Dispatcher,
 	channelSvc *channel.Service,
+	gatewaySvc *gateway.Service,
 	authSvc *auth.Service,
 	schedulerSvc *scheduler.Scheduler,
 	proxyConfig config.ProxyConfig,
 	upstreamConfig config.UpstreamConfig,
+	gatewayConfig config.GatewayConfig,
 	schedulerFactory SchedulerFactory,
 ) *Manager {
 	return &Manager{
@@ -53,11 +59,13 @@ func New(
 		log:              log,
 		dispatcher:       dispatcher,
 		channelSvc:       channelSvc,
+		gatewaySvc:       gatewaySvc,
 		schedulerFactory: schedulerFactory,
 		auth:             authSvc,
 		scheduler:        schedulerSvc,
 		proxyConfig:      proxyConfig,
 		upstreamConfig:   upstreamConfig.WithDefaults(),
+		gatewayConfig:    gatewayConfig.WithDefaults(),
 	}
 }
 
@@ -83,6 +91,12 @@ func (m *Manager) CurrentUpstream() config.UpstreamConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.upstreamConfig
+}
+
+func (m *Manager) CurrentGateway() config.GatewayConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.gatewayConfig
 }
 
 func (m *Manager) AuthMiddleware() gin.HandlerFunc {
@@ -115,6 +129,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 	secret := m.securitySecret
 	dispatcher := m.dispatcher
 	channelSvc := m.channelSvc
+	gatewaySvc := m.gatewaySvc
 	factory := m.schedulerFactory
 	oldScheduler := m.scheduler
 	m.mu.RUnlock()
@@ -148,6 +163,12 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 		channelSvc.UpdateProxyConfig(cfg.Proxy)
 		channelSvc.UpdateUpstreamConfig(cfg.Upstream)
 	}
+	gwCfg := cfg.Gateway.WithDefaults()
+	if gatewaySvc != nil {
+		gatewaySvc.UpdateProxyConfig(cfg.Proxy)
+		gatewaySvc.UpdateUpstreamConfig(cfg.Upstream)
+		gatewaySvc.UpdateGatewayConfig(gwCfg)
+	}
 
 	newScheduler := factory(cfg.Scheduler, cfg.Proxy)
 	if err := newScheduler.Start(); err != nil {
@@ -159,22 +180,24 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 	m.scheduler = newScheduler
 	m.proxyConfig = cfg.Proxy
 	m.upstreamConfig = cfg.Upstream.WithDefaults()
+	m.gatewayConfig = gwCfg
 	m.mu.Unlock()
 
 	if oldScheduler != nil {
 		oldScheduler.Stop()
 	}
 
+	sections := []string{"app", "auth", "scheduler", "notifications", "retention", "proxy", "upstream", "gateway"}
 	if m.log != nil {
 		m.log.Info("runtime config applied",
-			"sections", []string{"app", "auth", "scheduler", "notifications", "retention", "proxy", "upstream"},
+			"sections", sections,
 			"config_path", path,
 		)
 	}
 
 	return &ApplyResult{
-		AppliedSections: []string{"app", "auth", "scheduler", "notifications", "retention", "proxy", "upstream"},
-		Message:         "app、auth、scheduler、notifications、retention、proxy、upstream 已立即生效",
+		AppliedSections: sections,
+		Message:         "app、auth、scheduler、notifications、retention、proxy、upstream、gateway 已立即生效",
 	}, nil
 }
 

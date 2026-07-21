@@ -128,7 +128,7 @@ export function AlertFeed() {
 
   return (
     <>
-      <Card className="border border-border shadow-none lg:h-100">
+      <Card className="border border-border py-4 shadow-none lg:h-100 sm:py-6">
         <CardHeader className="flex shrink-0 flex-col gap-2 px-4 pb-2 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <CardTitle className="text-base font-semibold">{"告警动态"}</CardTitle>
           <div className="flex items-center gap-3 self-start sm:self-auto">
@@ -318,7 +318,7 @@ export function UpstreamAnnouncements() {
 
   return (
     <>
-      <Card className="border border-border shadow-none lg:h-100">
+      <Card className="border border-border py-4 shadow-none lg:h-100 sm:py-6">
         <CardHeader className="flex shrink-0 flex-col gap-2 px-4 pb-2 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <CardTitle className="text-base font-semibold">{"上游公告"}</CardTitle>
           <div className="flex items-center gap-3 self-start sm:self-auto">
@@ -543,7 +543,7 @@ export function CaptchaStatus() {
   }
 
   return (
-    <Card className="border border-border shadow-none">
+    <Card className="border border-border py-4 shadow-none sm:py-6">
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <CardTitle className="text-base font-semibold">{"验证码服务"}</CardTitle>
         <Button
@@ -726,7 +726,7 @@ export function NotificationStatus() {
   }
 
   return (
-    <Card className="border border-border shadow-none">
+    <Card className="border border-border py-4 shadow-none sm:py-6">
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <CardTitle className="text-base font-semibold">{"通知渠道"}</CardTitle>
         <Button

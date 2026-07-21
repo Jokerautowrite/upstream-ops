@@ -275,10 +275,11 @@ function sourceGroupOptionValue(group: RateSnapshot) {
 }
 
 function sourceGroupSelectValue(account: SyncAccountForm) {
+  // 有 remote id 时优先 id 匹配选项（sub2api）；名称仅用于展示
+  if (account.source_group_id) return `id:${account.source_group_id}`;
   if (account.source_group_name.trim()) {
     return `name:${account.source_group_name.trim()}`;
   }
-  if (account.source_group_id) return `id:${account.source_group_id}`;
   return "none";
 }
 
@@ -1953,10 +1954,11 @@ function SyncGroupFormView({
                               sourceGroup?.remote_group_id == null
                                 ? ""
                                 : String(sourceGroup.remote_group_id),
+                            // 有 ID 时也保留名称（sub2api）；仅 none 时清空
                             source_group_name:
-                              value === "none" || sourceGroup?.remote_group_id != null
+                              value === "none"
                                 ? ""
-                                : sourceGroup?.model_name ?? "",
+                                : (sourceGroup?.model_name ?? "").trim(),
                             test_model: "",
                           };
                           const nextAccount = { ...account, ...patch };

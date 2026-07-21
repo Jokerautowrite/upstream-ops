@@ -22,6 +22,14 @@ func (f *fakeUpstreamSync) SyncAllOnRateScan(ctx context.Context) {
 	f.called++
 }
 
+type fakeGatewayResort struct {
+	called int
+}
+
+func (f *fakeGatewayResort) ResortRoutesOnRateScan(ctx context.Context) {
+	f.called++
+}
+
 func openTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := storage.Open(storage.DBConfig{
@@ -72,6 +80,7 @@ func TestRunRetentionDeletesAnnouncements(t *testing.T) {
 		rates,
 		notifies,
 		announcements,
+		nil,
 		nil,
 		nil,
 		nil,
@@ -133,6 +142,7 @@ func TestRunRetentionDeletesUpstreamSyncLogsWithMonitorLogDays(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 		config.ProxyConfig{},
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
@@ -150,6 +160,7 @@ func TestRunRetentionDeletesUpstreamSyncLogsWithMonitorLogDays(t *testing.T) {
 
 func TestRunRatesTriggersUpstreamSync(t *testing.T) {
 	syncSvc := &fakeUpstreamSync{}
+	gatewayResort := &fakeGatewayResort{}
 	s := New(
 		config.SchedulerConfig{},
 		nil,
@@ -161,6 +172,7 @@ func TestRunRatesTriggersUpstreamSync(t *testing.T) {
 		nil,
 		nil,
 		syncSvc,
+		gatewayResort,
 		config.ProxyConfig{},
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
@@ -169,5 +181,8 @@ func TestRunRatesTriggersUpstreamSync(t *testing.T) {
 
 	if syncSvc.called != 1 {
 		t.Fatalf("sync calls = %d, want 1", syncSvc.called)
+	}
+	if gatewayResort.called != 1 {
+		t.Fatalf("gateway resort calls = %d, want 1", gatewayResort.called)
 	}
 }

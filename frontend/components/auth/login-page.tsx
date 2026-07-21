@@ -42,7 +42,7 @@ export function LoginPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <Card className="w-full max-w-sm">
+      <Card className="w-full max-w-sm py-6">
         <CardHeader className="space-y-1.5">
           <CardTitle className="text-2xl">{appTitle}</CardTitle>
           <CardDescription>登录后台，监控渠道余额和倍率。</CardDescription>
