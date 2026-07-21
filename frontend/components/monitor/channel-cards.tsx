@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import {
   ArrowUpDown,
+  ArrowRightLeft,
   CheckCircle2,
   ChevronDown,
   CreditCard,
@@ -61,7 +62,10 @@ import type { Channel, ChannelRedeemResult, RateSnapshot } from "@/lib/api-types
 import { ChannelFormDialog } from "@/components/monitor/channel-form-dialog"
 import { ChannelRedeemDialog } from "@/components/monitor/channel-redeem-dialog"
 import { ChannelRechargeDialog } from "@/components/monitor/channel-recharge-dialog"
-import { ChannelAPIKeysDialog } from "@/components/monitor/channel-api-keys-dialog"
+import {
+  ChannelAPIKeysDialog,
+  type ChannelAPIKeyInitialAction,
+} from "@/components/monitor/channel-api-keys-dialog"
 import {
   ChannelSubscriptionUsageMetricTiles,
 } from "@/components/monitor/channel-subscription-usage-dialog"
@@ -224,20 +228,30 @@ interface ChannelGroupRow {
   rate: RateSnapshot
 }
 
+interface ChannelAPIKeyDialogState {
+  channel: Channel
+  initialAction?: ChannelAPIKeyInitialAction
+}
+
 function ChannelGroupsDialog({
   open,
   onOpenChange,
   channels,
+  onAPIKeyAction,
+  nestedDialogOpen,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   channels: Channel[]
+  onAPIKeyAction: (channel: Channel, rate: RateSnapshot, type: "create" | "migrate") => void
+  nestedDialogOpen: boolean
 }) {
   const [query, setQuery] = useState("")
   const [sortMode, setSortMode] = useState<GroupSortMode>("channel-asc")
   const [rows, setRows] = useState<ChannelGroupRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [dialogContentElement, setDialogContentElement] = useState<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -303,7 +317,16 @@ function ChannelGroupsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-4xl">
+      <DialogContent
+        ref={setDialogContentElement}
+        className="sm:max-w-4xl"
+        onInteractOutside={(event) => {
+          if (nestedDialogOpen) event.preventDefault()
+        }}
+        onEscapeKeyDown={(event) => {
+          if (nestedDialogOpen) event.preventDefault()
+        }}
+      >
         <DialogHeader>
           <DialogTitle className="text-base font-medium">{"分组"}</DialogTitle>
           <DialogDescription className="text-xs">
@@ -340,28 +363,29 @@ function ChannelGroupsDialog({
             <TableHeader>
               <TableRow>
                 <TableHead className="h-9 font-medium text-muted-foreground">{"渠道"}</TableHead>
-                <TableHead className="h-9 font-medium text-muted-foreground">{"类型"}</TableHead>
+                <TableHead className="hidden h-9 font-medium text-muted-foreground sm:table-cell">{"类型"}</TableHead>
                 <TableHead className="h-9 font-medium text-muted-foreground">{"分组"}</TableHead>
                 <TableHead className="h-9 text-right font-medium text-muted-foreground">{"倍率"}</TableHead>
-                <TableHead className="h-9 text-right font-medium text-muted-foreground">{"更新"}</TableHead>
+                <TableHead className="hidden h-9 text-right font-medium text-muted-foreground sm:table-cell">{"更新"}</TableHead>
+                <TableHead className="h-9 text-right font-medium text-muted-foreground">{"操作"}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-24 text-center text-xs text-muted-foreground">
+                  <TableCell colSpan={6} className="h-24 text-center text-xs text-muted-foreground">
                     {"加载中…"}
                   </TableCell>
                 </TableRow>
               ) : error ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-24 text-center text-xs text-danger">
+                  <TableCell colSpan={6} className="h-24 text-center text-xs text-danger">
                     {error}
                   </TableCell>
                 </TableRow>
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-24 text-center text-xs text-muted-foreground">
+                  <TableCell colSpan={6} className="h-24 text-center text-xs text-muted-foreground">
                     {rows.length === 0 ? "暂无分组数据" : "没有匹配的分组"}
                   </TableCell>
                 </TableRow>
@@ -369,7 +393,7 @@ function ChannelGroupsDialog({
                 filteredRows.map(({ key, channel, rate }) => (
                   <TableRow key={key}>
                     <TableCell>{channel.name}</TableCell>
-                    <TableCell>
+                    <TableCell className="hidden sm:table-cell">
                       <span
                         className={cn(
                           "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-normal ring-1 ring-inset",
@@ -381,7 +405,7 @@ function ChannelGroupsDialog({
                         {channelTypeLabel(channel.type)}
                       </span>
                     </TableCell>
-                    <TableCell className="min-w-60 whitespace-normal">
+                    <TableCell className="min-w-40 whitespace-normal sm:min-w-60">
                       <div>{rate.model_name}</div>
                       {rate.description ? (
                         <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
@@ -394,8 +418,40 @@ function ChannelGroupsDialog({
                         {formatRatio(rate.ratio)}
                       </span>
                     </TableCell>
-                    <TableCell className="text-right text-muted-foreground">
+                    <TableCell className="hidden text-right text-muted-foreground sm:table-cell">
                       {relativeTime(rate.last_seen_at)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="touch-manipulation"
+                            aria-label="API Key 操作"
+                            title="API Key 操作"
+                          >
+                            <KeyRound className="size-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent
+                          portalContainer={dialogContentElement}
+                          align="end"
+                          sideOffset={6}
+                          className="z-[70]"
+                          onCloseAutoFocus={(event) => event.preventDefault()}
+                        >
+                          <DropdownMenuItem className="cursor-pointer py-2" onSelect={() => onAPIKeyAction(channel, rate, "create")}>
+                            <Plus className="size-4" />
+                            新建到此分组
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="cursor-pointer py-2" onSelect={() => onAPIKeyAction(channel, rate, "migrate")}>
+                            <ArrowRightLeft className="size-4" />
+                            将现有 API Key 移到此分组
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </TableCell>
                   </TableRow>
                 ))
@@ -528,7 +584,7 @@ export function ChannelCards() {
   const [groupsOpen, setGroupsOpen] = useState(false)
   const [redeeming, setRedeeming] = useState<Channel | null>(null)
   const [recharging, setRecharging] = useState<Channel | null>(null)
-  const [managingKeys, setManagingKeys] = useState<Channel | null>(null)
+  const [apiKeyDialog, setAPIKeyDialog] = useState<ChannelAPIKeyDialogState | null>(null)
   const [busyAction, setBusyAction] = useState<string | null>(null)
   // 每个渠道当前 sync 进度（最新一条事件） + 历史事件
   const [syncState, setSyncState] = useState<Record<number, ChannelSyncState>>({})
@@ -940,7 +996,7 @@ export function ChannelCards() {
                       variant="outline"
                       size="sm"
                       className="gap-1 text-xs"
-                      onClick={() => setManagingKeys(c)}
+                      onClick={() => setAPIKeyDialog({ channel: c })}
                     >
                       <KeyRound className="size-3" />
                       {"密钥"}
@@ -1147,6 +1203,19 @@ export function ChannelCards() {
         open={groupsOpen}
         onOpenChange={setGroupsOpen}
         channels={channels ?? []}
+        nestedDialogOpen={apiKeyDialog != null}
+        onAPIKeyAction={(channel, rate, type) => {
+          setAPIKeyDialog({
+            channel,
+            initialAction: {
+              type,
+              targetGroup: {
+                id: rate.remote_group_id ?? null,
+                name: rate.model_name,
+              },
+            },
+          })
+        }}
       />
 
       <ChannelRedeemDialog
@@ -1169,11 +1238,12 @@ export function ChannelCards() {
       />
 
       <ChannelAPIKeysDialog
-        open={managingKeys != null}
+        open={apiKeyDialog != null}
         onOpenChange={(v) => {
-          if (!v) setManagingKeys(null)
+          if (!v) setAPIKeyDialog(null)
         }}
-        channel={managingKeys}
+        channel={apiKeyDialog?.channel ?? null}
+        initialAction={apiKeyDialog?.initialAction}
       />
 
       {confirmDialog}

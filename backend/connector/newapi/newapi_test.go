@@ -518,6 +518,17 @@ func TestCreateUpdateDeleteRevealAPIKey(t *testing.T) {
 	}
 }
 
+func TestBuildNewAPIUpdateTokenGroupOnly(t *testing.T) {
+	group := "pro"
+	body := buildNewAPIUpdateToken(9, connector.APIKeyUpdateRequest{Group: &group})
+	if body["id"] != 9 || body["group"] != group {
+		t.Fatalf("group update body = %#v", body)
+	}
+	if len(body) != 2 {
+		t.Fatalf("group update contains unrelated fields: %#v", body)
+	}
+}
+
 func TestCreateAPIKeyFallsBackToListWhenSearchMisses(t *testing.T) {
 	mux := http.NewServeMux()
 	listCalls := 0

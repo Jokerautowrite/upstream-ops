@@ -175,6 +175,8 @@ From each channel card, you can manage upstream API keys:
 - Edit name, group, status, quota, expiration time, IP allowlist or blocklist, model restrictions, and related fields.
 - Delete API keys.
 - Reveal and copy full keys.
+- From the group overview, create an API key directly in a selected group or move one existing key from the same channel into that group.
+- Before moving a key, the target group is revalidated and a source-to-target confirmation is shown. Keys already in the target group remain visible but cannot be selected again.
 
 Available fields depend on the upstream type and its API capability.
 
