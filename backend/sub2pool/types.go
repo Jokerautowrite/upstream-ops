@@ -130,6 +130,11 @@ type KeyAttestationInput struct {
 type KeyAttestationStore interface {
 	ListKeyAttestations(targetID uint) ([]KeyAttestation, error)
 	UpsertKeyAttestations(items []KeyAttestation) error
+// DiscoveryAccountStore identifies accounts created by the discovery review
+// workflow. They remain routable, but are excluded from automated priority
+// writes until an explicit promotion path exists.
+type DiscoveryAccountStore interface {
+	ListAppliedTargetAccountIDs(targetID uint) ([]int64, error)
 }
 
 type RateSnapshotStore interface {
@@ -217,6 +222,7 @@ type AccountSnapshot struct {
 	// key_attested is an explicit same-origin fingerprint binding, not a name
 	// or group fallback.
 	MultiplierSource string `json:"multiplier_source,omitempty"`
+	DiscoveryManaged bool   `json:"-"`
 	IdentityDigest   string `json:"-"`
 }
 

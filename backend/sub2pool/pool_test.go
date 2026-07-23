@@ -213,6 +213,40 @@ func TestPriorityPreviewPlacesDebtLastAndAllowsDebtWithoutMultiplier(t *testing.
 	}
 }
 
+func TestPriorityPreviewPreservesUnknownAndUntrustedAccounts(t *testing.T) {
+	known := priorityAccount(1, ChannelPLUS, 90, floatPtr(0.10), floatPtr(20))
+	discovery := priorityAccount(2, ChannelPLUS, 10, floatPtr(0.01), floatPtr(20))
+	discovery.DiscoveryManaged = true
+	untrusted := priorityAccount(3, ChannelPLUS, 20, floatPtr(0.01), floatPtr(20))
+	untrusted.MultiplierSource = "display_only"
+	unknown := priorityAccount(4, ChannelOther, 30, floatPtr(0.05), floatPtr(20))
+
+	snapshot := Snapshot{
+		TargetID: 1,
+		Accounts: []AccountSnapshot{
+			known,
+			discovery,
+			untrusted,
+			unknown,
+		},
+	}
+	preview := buildPriorityPreview(snapshot)
+	targets := proposalTargets(preview.Proposals)
+
+	if len(targets) != 1 || targets[known.ID] != 40 {
+		t.Fatalf("targets = %#v", targets)
+	}
+	if len(preview.UnknownChannelIDs) != 0 {
+		t.Fatalf("unknown channels blocked the preview: %#v", preview.UnknownChannelIDs)
+	}
+	if len(preview.MissingMultiplierIDs) != 1 || preview.MissingMultiplierIDs[0] != untrusted.ID {
+		t.Fatalf("missing multiplier ids = %#v", preview.MissingMultiplierIDs)
+	}
+	if violations := validateGuards(snapshot, preview, emptyTargetState(), Config{MinimumAccountCount: 1}.withDefaults()); len(violations) != 0 {
+		t.Fatalf("skipped accounts unexpectedly blocked automation: %#v", violations)
+	}
+}
+
 func TestMatcherUsesFullKeyHashBeforeURLAndNeverFallsBackAfterMismatch(t *testing.T) {
 	channels := &fakeChannels{items: []storage.Channel{{
 		ID:             7,

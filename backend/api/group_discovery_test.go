@@ -145,3 +145,26 @@ func TestGroupDiscoveryApproveEndpointBindsSnakeCaseInput(t *testing.T) {
 		t.Fatalf("approval fields = %#v", response.Data)
 	}
 }
+
+func TestGroupDiscoveryApplyEndpointIsFrozenByDefault(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("GROUP_DISCOVERY_APPLY_ENABLED", "")
+
+	router := gin.New()
+	registerGroupDiscovery(router.Group("/api"), &Deps{GroupDiscovery: &discovery.Service{}})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/upstream-sync/group-discovery/apply",
+		strings.NewReader(`{"candidate_ids":[1]}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("apply status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "temporarily disabled") {
+		t.Fatalf("apply response = %s", rec.Body.String())
+	}
+}

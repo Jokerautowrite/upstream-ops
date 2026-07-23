@@ -4,6 +4,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/bejix/upstream-ops/backend/discovery"
 	"github.com/gin-gonic/gin"
@@ -80,6 +82,10 @@ func rejectGroupDiscoveryCandidate(c *gin.Context, d *Deps) {
 }
 
 func applyGroupDiscoveryCandidates(c *gin.Context, d *Deps) {
+	if !groupDiscoveryApplyEnabled() {
+		c.JSON(http.StatusConflict, gin.H{"error": "group discovery apply is temporarily disabled"})
+		return
+	}
 	var in struct {
 		CandidateIDs []uint `json:"candidate_ids"`
 	}
@@ -93,6 +99,10 @@ func applyGroupDiscoveryCandidates(c *gin.Context, d *Deps) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+func groupDiscoveryApplyEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("GROUP_DISCOVERY_APPLY_ENABLED")), "true")
 }
 
 func probeGroupDiscoveryCandidate(c *gin.Context, d *Deps) {

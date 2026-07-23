@@ -20,6 +20,7 @@ type Service struct {
 	matcher             *matcher
 	accountRateMappings AccountRateMappingStore
 	keyAttestations     KeyAttestationStore
+	discoveryAccounts   DiscoveryAccountStore
 	rates               RateSnapshotStore
 	state               StateStore
 	auto                AutomationStore
@@ -76,6 +77,10 @@ func (s *Service) SetAccountRateMappingStore(store AccountRateMappingStore, rate
 
 func (s *Service) SetKeyAttestationStore(store KeyAttestationStore) {
 	s.keyAttestations = store
+}
+
+func (s *Service) SetDiscoveryAccountStore(store DiscoveryAccountStore) {
+	s.discoveryAccounts = store
 }
 
 func (s *Service) Snapshot(ctx context.Context, targetID uint) (*Snapshot, error) {
@@ -1238,6 +1243,16 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 		s.keyAttestations,
 		mappingChannels,
 	)
+	discoveryAccountIDs := map[int64]struct{}{}
+	if s.discoveryAccounts != nil {
+		ids, err := s.discoveryAccounts.ListAppliedTargetAccountIDs(targetID)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		for _, id := range ids {
+			discoveryAccountIDs[id] = struct{}{}
+		}
+	}
 	for _, raw := range accounts {
 		account := raw.Account
 		if stats, exists := todayStats[account.ID]; exists {
@@ -1318,6 +1333,7 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 			MatchStatus:      match.status,
 			FingerprintState: fingerprintState,
 			MultiplierSource: poolMultiplierSource(match.status, match.rate != nil),
+			DiscoveryManaged: hasDiscoveryAccountID(discoveryAccountIDs, account.ID),
 			IdentityDigest:   identityStateDigest,
 		}
 		item.Availability.Healthy = item.Schedulable &&
@@ -1359,6 +1375,11 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 		Healthy:         snapshot.Summary.HealthyCount,
 	}
 	return snapshot, nil
+}
+
+func hasDiscoveryAccountID(ids map[int64]struct{}, accountID int64) bool {
+	_, exists := ids[accountID]
+	return exists
 }
 
 // allowsAccountRateMapping accepts every status except true key ambiguity.
@@ -1423,6 +1444,12 @@ func skipReason(account AccountSnapshot) string {
 	}
 	if !account.PoolManaged {
 		return "not_pool_managed"
+	}
+	if account.DiscoveryManaged {
+		return "discovery_isolated"
+	}
+	if account.Channel == ChannelOther {
+		return "unknown_channel"
 	}
 	if !account.Availability.Matched {
 		return account.MatchStatus

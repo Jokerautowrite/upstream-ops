@@ -52,6 +52,20 @@ func (r *GroupDiscoveryCandidates) FindBySource(channelID uint, groupKey string)
 	return &item, nil
 }
 
+// ListAppliedTargetAccountIDs returns the Sub2 accounts created by discovery
+// and currently owned by the review queue. The priority controller uses this
+// list to keep discovery traffic isolated until it is explicitly promoted.
+func (r *GroupDiscoveryCandidates) ListAppliedTargetAccountIDs(targetID uint) ([]int64, error) {
+	var ids []int64
+	if err := r.db.Model(&GroupDiscoveryCandidate{}).
+		Where("target_id = ? AND status = ? AND target_account_id IS NOT NULL", targetID, "applied").
+		Order("target_account_id ASC").
+		Pluck("target_account_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // DeleteUnselectedSafe prunes only local, unapplied review rows. Anything
 // approved or carrying a remote creation/apply trace is retained so a scan can
 // never orphan a source key or Sub2 account.

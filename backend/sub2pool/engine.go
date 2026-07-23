@@ -31,8 +31,27 @@ func buildPriorityPreview(snapshot Snapshot) PriorityPreview {
 			raiseAccountFloors(channelFloor, groupFloor, account, account.CurrentPriority)
 			continue
 		}
+		if account.DiscoveryManaged {
+			// Discovery-created accounts stay routable at their current priority,
+			// but cannot affect the established account-pool ordering.
+			reserveAccountPriority(reservedChannels, reservedGroups, account, account.CurrentPriority)
+			raiseAccountFloors(channelFloor, groupFloor, account, account.CurrentPriority)
+			continue
+		}
 		if account.Channel == ChannelOther {
-			preview.UnknownChannelIDs = append(preview.UnknownChannelIDs, account.ID)
+			// An unclassified account must not freeze every known business
+			// channel. Preserve its current position until it is classified.
+			reserveAccountPriority(reservedChannels, reservedGroups, account, account.CurrentPriority)
+			raiseAccountFloors(channelFloor, groupFloor, account, account.CurrentPriority)
+			continue
+		}
+		if account.MultiplierSource != "key_exact" {
+			// Name, group, and manual mappings are useful for display, but only
+			// an exact API-key match may influence automated priority writes.
+			preview.MissingMultiplierIDs = append(preview.MissingMultiplierIDs, account.ID)
+			reserveAccountPriority(reservedChannels, reservedGroups, account, account.CurrentPriority)
+			raiseAccountFloors(channelFloor, groupFloor, account, account.CurrentPriority)
+			continue
 		}
 		if !trustedMultiplierSource(account.MultiplierSource) {
 			// Name, group, and manual mappings are useful for display. Priority
