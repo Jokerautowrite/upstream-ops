@@ -194,6 +194,11 @@ func (m *matcher) matchAccounts(ctx context.Context, accounts []sub2api.PoolAcco
 			if len(candidates) == 0 {
 				if _, unavailable := unavailableURLs[normalized]; unavailable && normalized != "" {
 					match.status = "upstream_unavailable"
+				} else if normalized != "" && len(byURLChannel[normalized]) == 0 {
+					// No enabled same-origin monitor exists. This says nothing
+					// about whether the Sub2 key is valid, so it must not be
+					// reported as a key mismatch.
+					match.status = "monitor_source_missing"
 				} else {
 					match.status = "key_mismatch"
 				}

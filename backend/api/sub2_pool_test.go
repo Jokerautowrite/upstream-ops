@@ -168,6 +168,54 @@ func TestSub2PoolSchedulableAndAutomationRoutesAcceptStringTargetIDs(t *testing.
 	}
 }
 
+func TestSub2PoolKeyAttestationRoutesNeverLeakFingerprint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := newSub2PoolAPIStub()
+	service.attestations = []sub2pool.KeyAttestation{{
+		TargetID:     1,
+		AccountID:    11,
+		ChannelID:    7,
+		APIKeySHA256: "must-not-leak",
+		Source:       "operator_attested",
+		CreatedAt:    time.Date(2026, 7, 23, 1, 2, 3, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 7, 23, 1, 2, 3, 0, time.UTC),
+	}}
+	router := gin.New()
+	RegisterSub2Pool(router.Group("/api"), service, sub2PoolTargetsStub{items: []storage.UpstreamSyncTarget{{ID: 1, Name: "Sub2"}}})
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/sub2-pool/targets/1/key-attestations", nil)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	if strings.Contains(listRec.Body.String(), "must-not-leak") || strings.Contains(listRec.Body.String(), "api_key_sha256") {
+		t.Fatalf("list leaked fingerprint: %s", listRec.Body.String())
+	}
+	if !strings.Contains(listRec.Body.String(), `"account_id":11`) || !strings.Contains(listRec.Body.String(), `"channel_id":7`) {
+		t.Fatalf("list response missing safe attestation fields: %s", listRec.Body.String())
+	}
+
+	postReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/sub2-pool/targets/1/key-attestations",
+		strings.NewReader(`{"items":[{"account_id":12,"channel_id":8}]}`),
+	)
+	postReq.Header.Set("Content-Type", "application/json")
+	postRec := httptest.NewRecorder()
+	router.ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("post status=%d body=%s", postRec.Code, postRec.Body.String())
+	}
+	if service.attestTarget != 1 || len(service.attestInputs) != 1 ||
+		service.attestInputs[0].AccountID != 12 || service.attestInputs[0].ChannelID != 8 {
+		t.Fatalf("attest request = target:%d inputs:%#v", service.attestTarget, service.attestInputs)
+	}
+	if strings.Contains(postRec.Body.String(), "must-not-leak") || strings.Contains(postRec.Body.String(), "api_key_sha256") {
+		t.Fatalf("post leaked fingerprint: %s", postRec.Body.String())
+	}
+}
+
 func TestSub2PoolAutomationPreparedErrorAndPartialAreNotSuccessful(t *testing.T) {
 	now := time.Date(2026, 7, 12, 8, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -235,6 +283,9 @@ type sub2PoolAPIStub struct {
 	schedulableAccount  int64
 	schedulableValue    bool
 	automation          *sub2pool.AutomationStatus
+	attestations        []sub2pool.KeyAttestation
+	attestTarget        uint
+	attestInputs        []sub2pool.KeyAttestationInput
 }
 
 func newSub2PoolAPIStub() *sub2PoolAPIStub {
@@ -334,4 +385,26 @@ func (s *sub2PoolAPIStub) SetAutomation(targetID uint, enabled bool) (*sub2pool.
 		AutomationState: sub2pool.AutomationState{TargetID: targetID, Enabled: enabled, UpdatedAt: time.Now()},
 	}
 	return s.automation, nil
+}
+
+func (s *sub2PoolAPIStub) ListKeyAttestations(uint) ([]sub2pool.KeyAttestation, error) {
+	return append([]sub2pool.KeyAttestation(nil), s.attestations...), nil
+}
+
+func (s *sub2PoolAPIStub) AttestKeyMappings(_ context.Context, targetID uint, inputs []sub2pool.KeyAttestationInput) ([]sub2pool.KeyAttestation, error) {
+	s.attestTarget = targetID
+	s.attestInputs = append([]sub2pool.KeyAttestationInput(nil), inputs...)
+	out := make([]sub2pool.KeyAttestation, 0, len(inputs))
+	for _, input := range inputs {
+		out = append(out, sub2pool.KeyAttestation{
+			TargetID:     targetID,
+			AccountID:    input.AccountID,
+			ChannelID:    input.ChannelID,
+			APIKeySHA256: "must-not-leak",
+			Source:       "operator_attested",
+			CreatedAt:    time.Now(),
+			UpdatedAt:    time.Now(),
+		})
+	}
+	return out, nil
 }

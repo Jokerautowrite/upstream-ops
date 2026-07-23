@@ -160,6 +160,7 @@ func main() {
 		poolConfig,
 	)
 	poolSvc.SetAccountRateMappingStore(poolState, rates)
+	poolSvc.SetKeyAttestationStore(poolState)
 	poolSvc.SetDispatcher(sub2pool.NewNotifyAdapter(dispatcher))
 	poolRunner := sub2pool.NewRunner(syncTargets, poolSvc, log)
 	discoverySvc := discovery.New(channels, discoveryCandidates, syncTargets, syncGroups, cipher, channelSvc)

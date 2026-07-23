@@ -24,6 +24,8 @@ type Sub2PoolService interface {
 	SetSchedulable(ctx context.Context, targetID uint, accountID int64, schedulable bool) (*sub2pool.SchedulableResult, error)
 	GetAutomation(targetID uint) (*sub2pool.AutomationStatus, error)
 	SetAutomation(targetID uint, enabled bool) (*sub2pool.AutomationStatus, error)
+	ListKeyAttestations(targetID uint) ([]sub2pool.KeyAttestation, error)
+	AttestKeyMappings(ctx context.Context, targetID uint, inputs []sub2pool.KeyAttestationInput) ([]sub2pool.KeyAttestation, error)
 }
 
 type sub2PoolTargetLister interface {
@@ -41,6 +43,8 @@ func RegisterSub2Pool(g *gin.RouterGroup, service Sub2PoolService, targets sub2P
 	group.GET("/targets", func(c *gin.Context) { listSub2PoolTargets(c, targets) })
 	group.GET("/targets/:id/snapshot/cached", func(c *gin.Context) { getCachedSub2PoolSnapshot(c, service, targets) })
 	group.GET("/targets/:id/snapshot", func(c *gin.Context) { getSub2PoolSnapshot(c, service, targets) })
+	group.GET("/targets/:id/key-attestations", func(c *gin.Context) { listSub2PoolKeyAttestations(c, service) })
+	group.POST("/targets/:id/key-attestations", func(c *gin.Context) { attestSub2PoolKeys(c, service) })
 	group.POST("/targets/:id/preview", func(c *gin.Context) { previewSub2PoolPriorities(c, service) })
 	group.POST("/targets/:id/apply", func(c *gin.Context) { applySub2PoolPriorities(c, service) })
 	group.PATCH("/accounts/:id/schedulable", func(c *gin.Context) { setSub2PoolSchedulable(c, service) })
@@ -234,15 +238,77 @@ func accountDTO(account sub2pool.AccountSnapshot, suggestions map[int64]int, upd
 	return item
 }
 
-// poolMultiplierConfidence：仅 API Key 精确匹配为 trusted；其余有倍率也是 display_only。
+// poolMultiplierConfidence keeps remote key enumeration separate from
+// operator-created same-origin fingerprint attestations.
 func poolMultiplierConfidence(account sub2pool.AccountSnapshot) string {
 	if account.UpstreamRate == nil {
 		return "missing"
 	}
-	if account.MatchStatus == "key_exact" {
+	if account.MultiplierSource == "key_exact" || account.MultiplierSource == "key_attested" {
 		return "trusted"
 	}
 	return "display_only"
+}
+
+type sub2PoolKeyAttestationInput struct {
+	Items []sub2pool.KeyAttestationInput `json:"items"`
+}
+
+type sub2PoolKeyAttestationDTO struct {
+	TargetID  string    `json:"target_id"`
+	AccountID int64     `json:"account_id"`
+	ChannelID uint      `json:"channel_id"`
+	Source    string    `json:"source"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func listSub2PoolKeyAttestations(c *gin.Context, service Sub2PoolService) {
+	targetID, err := uintParam(c, "id")
+	if err != nil {
+		failSub2Pool(c, sub2pool.ErrInvalidInput)
+		return
+	}
+	items, err := service.ListKeyAttestations(targetID)
+	if err != nil {
+		failSub2Pool(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": keyAttestationDTOs(items)})
+}
+
+func attestSub2PoolKeys(c *gin.Context, service Sub2PoolService) {
+	targetID, err := uintParam(c, "id")
+	if err != nil {
+		failSub2Pool(c, sub2pool.ErrInvalidInput)
+		return
+	}
+	var input sub2PoolKeyAttestationInput
+	if err := c.ShouldBindJSON(&input); err != nil || len(input.Items) == 0 {
+		failSub2Pool(c, sub2pool.ErrInvalidInput)
+		return
+	}
+	items, err := service.AttestKeyMappings(c.Request.Context(), targetID, input.Items)
+	if err != nil {
+		failSub2Pool(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": keyAttestationDTOs(items)})
+}
+
+func keyAttestationDTOs(items []sub2pool.KeyAttestation) []sub2PoolKeyAttestationDTO {
+	out := make([]sub2PoolKeyAttestationDTO, 0, len(items))
+	for _, item := range items {
+		out = append(out, sub2PoolKeyAttestationDTO{
+			TargetID:  strconv.FormatUint(uint64(item.TargetID), 10),
+			AccountID: item.AccountID,
+			ChannelID: item.ChannelID,
+			Source:    item.Source,
+			CreatedAt: item.CreatedAt,
+			UpdatedAt: item.UpdatedAt,
+		})
+	}
+	return out
 }
 
 func groupNames(groups []sub2pool.GroupRef) string {

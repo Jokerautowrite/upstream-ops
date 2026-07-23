@@ -344,9 +344,9 @@ export interface Sub2PoolAccount {
   current_priority?: number | null
   suggested_priority?: number | null
   upstream_multiplier?: number | null
-  /** key_exact | account_mapping | display_only */
+  /** key_exact | key_attested | account_mapping | display_only */
   multiplier_source?: string | null
-  /** trusted = 仅 API Key 精确匹配；display_only = 非 Key 兜底展示 */
+  /** trusted = 远端 Key 精确或人工核验绑定；display_only = 非 Key 兜底展示 */
   multiplier_confidence?: "trusted" | "display_only" | "missing" | string | null
   balance?: number | null
   balance_status?: string | null
@@ -358,7 +358,7 @@ export interface Sub2PoolAccount {
   current_concurrency?: number | null
   max_concurrency?: number | null
   missing_data?: string[]
-  /** key_exact 为唯一可信；其它状态必须明示非 Key 匹配 */
+  /** key_exact 为远端精确，key_attested 为人工核验绑定 */
   match_status?: string | null
   fingerprint_state?: string | null
   updated_at?: string | null

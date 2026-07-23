@@ -19,6 +19,7 @@ type Service struct {
 	admin               AdminGateway
 	matcher             *matcher
 	accountRateMappings AccountRateMappingStore
+	keyAttestations     KeyAttestationStore
 	rates               RateSnapshotStore
 	state               StateStore
 	auto                AutomationStore
@@ -71,6 +72,10 @@ func (s *Service) SetAccountRateMappingStore(store AccountRateMappingStore, rate
 	if s.matcher != nil {
 		s.matcher.setRates(rates)
 	}
+}
+
+func (s *Service) SetKeyAttestationStore(store KeyAttestationStore) {
+	s.keyAttestations = store
 }
 
 func (s *Service) Snapshot(ctx context.Context, targetID uint) (*Snapshot, error) {
@@ -1227,6 +1232,12 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 		mappingChannels,
 		s.rates,
 	)
+	attestedMatches := resolveKeyAttestations(
+		targetID,
+		accounts,
+		s.keyAttestations,
+		mappingChannels,
+	)
 	for _, raw := range accounts {
 		account := raw.Account
 		if stats, exists := todayStats[account.ID]; exists {
@@ -1244,6 +1255,19 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 				if match.status == "fingerprint_missing" {
 					match.matched = true
 					match.status = "account_mapping"
+				}
+			}
+		}
+		if match.status != "key_exact" {
+			if attested, exists := attestedMatches[account.ID]; exists {
+				match.status = "key_attested"
+				match.matched = true
+				match.channelID = attested.channel.ID
+				if match.balance == nil {
+					match.balance = cloneFloat(attested.channel.LastBalance)
+				}
+				if match.todayCost == nil {
+					match.todayCost = cloneFloat(attested.channel.TodayCost)
 				}
 			}
 		}
@@ -1279,8 +1303,9 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 				Available: raw.Stats.TodayRequests != nil || raw.Stats.TodayCost != nil,
 			},
 			Availability: Availability{
-				// 仅 Key 精确匹配算 matched；名/映射/URL 兜底不得冒充可信对齐。
-				Matched:          match.matched && match.status == "key_exact",
+				// Only remote exact keys and explicit fingerprint attestations
+				// are trusted. Name, group, and URL fallbacks stay display-only.
+				Matched:          match.matched && trustedMatchStatus(match.status),
 				BalanceAvailable: match.balance != nil,
 				TodayStatsReady:  raw.Stats.TodayRequests != nil || raw.Stats.TodayCost != nil,
 				RateAvailable:    match.rate != nil,
@@ -1290,10 +1315,10 @@ func (s *Service) snapshot(ctx context.Context, targetID uint, target sub2api.Ad
 				TemporarilyUnschedulable: raw.Health.TemporarilyUnschedulable,
 				Overloaded:               raw.Health.Overloaded,
 			},
-			MatchStatus:        match.status,
-			FingerprintState:   fingerprintState,
-			MultiplierSource:   poolMultiplierSource(match.status, match.rate != nil),
-			IdentityDigest:     identityStateDigest,
+			MatchStatus:      match.status,
+			FingerprintState: fingerprintState,
+			MultiplierSource: poolMultiplierSource(match.status, match.rate != nil),
+			IdentityDigest:   identityStateDigest,
 		}
 		item.Availability.Healthy = item.Schedulable &&
 			item.Availability.Matched &&
@@ -1343,19 +1368,32 @@ func allowsAccountRateMapping(match upstreamMatch) bool {
 	return match.status != "key_ambiguous"
 }
 
-// poolMultiplierSource 标明倍率可信度：仅 key_exact 为精确；其它有值也只是展示兜底。
+// poolMultiplierSource distinguishes remote key matches from explicit
+// fingerprint attestations and display-only fallback data.
 func poolMultiplierSource(matchStatus string, hasRate bool) string {
-	if !hasRate {
-		return ""
-	}
 	switch matchStatus {
 	case "key_exact":
+		if !hasRate {
+			return ""
+		}
 		return "key_exact"
+	case "key_attested":
+		return "key_attested"
 	case "account_mapping":
+		if !hasRate {
+			return ""
+		}
 		return "account_mapping"
 	default:
+		if !hasRate {
+			return ""
+		}
 		return "display_only"
 	}
+}
+
+func trustedMatchStatus(status string) bool {
+	return status == "key_exact" || status == "key_attested"
 }
 
 func lowestGroups(ids []int64, groups map[int64]GroupSnapshot) []GroupRef {
@@ -1388,6 +1426,9 @@ func skipReason(account AccountSnapshot) string {
 	}
 	if !account.Availability.Matched {
 		return account.MatchStatus
+	}
+	if !trustedMultiplierSource(account.MultiplierSource) {
+		return "untrusted_multiplier"
 	}
 	if !account.Availability.BalanceAvailable {
 		return "balance_missing"

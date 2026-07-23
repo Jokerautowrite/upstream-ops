@@ -258,6 +258,27 @@ func TestMatcherUsesFullKeyHashBeforeURLAndNeverFallsBackAfterMismatch(t *testin
 	}
 }
 
+func TestMatcherSeparatesMissingMonitorSourceFromKeyMismatch(t *testing.T) {
+	channels := &fakeChannels{items: []storage.Channel{{
+		ID:             7,
+		SiteURL:        "https://other.example.test",
+		MonitorEnabled: true,
+	}}}
+	keys := &fakeKeys{
+		items:    map[uint][]connector.APIKey{},
+		revealed: map[string]string{},
+	}
+	matches, err := newMatcher(channels, keys).matchAccounts(context.Background(), []sub2api.PoolAccount{
+		poolAccount(1, "https://api.example.test/v1", "valid-but-unmonitored-key", 10),
+	})
+	if err != nil {
+		t.Fatalf("match accounts: %v", err)
+	}
+	if got := matches[1]; got.status != "monitor_source_missing" || got.matched {
+		t.Fatalf("missing monitor source match = %#v", got)
+	}
+}
+
 func TestMatcherUsesSameOriginKeyAcrossURLPath(t *testing.T) {
 	channels := &fakeChannels{items: []storage.Channel{{
 		ID:             7,
@@ -393,7 +414,7 @@ func TestMatcherIgnoresDisabledChannels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("match accounts: %v", err)
 	}
-	if matches[1].status != "key_mismatch" || matches[1].matched || matches[1].rate != nil || matches[1].balance != nil {
+	if matches[1].status != "monitor_source_missing" || matches[1].matched || matches[1].rate != nil || matches[1].balance != nil {
 		t.Fatalf("disabled channel affected matcher: %#v", matches[1])
 	}
 }
@@ -1423,14 +1444,15 @@ func TestSnapshotUsesSafeAccountTodayStatsAndHealthFlags(t *testing.T) {
 
 func priorityAccount(id int64, channel string, current int, rate, balance *float64) AccountSnapshot {
 	return AccountSnapshot{
-		ID:              id,
-		Schedulable:     true,
-		PoolManaged:     true,
-		CurrentPriority: current,
-		GroupIDs:        []int64{1},
-		Channel:         channel,
-		UpstreamRate:    rate,
-		Balance:         balance,
+		ID:               id,
+		Schedulable:      true,
+		PoolManaged:      true,
+		CurrentPriority:  current,
+		GroupIDs:         []int64{1},
+		Channel:          channel,
+		UpstreamRate:     rate,
+		Balance:          balance,
+		MultiplierSource: "key_exact",
 		Availability: Availability{
 			BalanceAvailable: balance != nil,
 			RateAvailable:    rate != nil,

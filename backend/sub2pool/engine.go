@@ -34,6 +34,15 @@ func buildPriorityPreview(snapshot Snapshot) PriorityPreview {
 		if account.Channel == ChannelOther {
 			preview.UnknownChannelIDs = append(preview.UnknownChannelIDs, account.ID)
 		}
+		if !trustedMultiplierSource(account.MultiplierSource) {
+			// Name, group, and manual mappings are useful for display. Priority
+			// writes need either a remote exact key or an explicit fingerprint
+			// attestation.
+			preview.MissingMultiplierIDs = append(preview.MissingMultiplierIDs, account.ID)
+			reserveAccountPriority(reservedChannels, reservedGroups, account, account.CurrentPriority)
+			raiseAccountFloors(channelFloor, groupFloor, account, account.CurrentPriority)
+			continue
+		}
 		if !account.Availability.BalanceAvailable {
 			preview.MissingBalanceIDs = append(preview.MissingBalanceIDs, account.ID)
 			reserveAccountPriority(reservedChannels, reservedGroups, account, account.CurrentPriority)
@@ -126,6 +135,10 @@ func buildPriorityPreview(snapshot Snapshot) PriorityPreview {
 
 	preview.Signature = previewSignature(snapshot, preview.Proposals)
 	return preview
+}
+
+func trustedMultiplierSource(source string) bool {
+	return source == "key_exact" || source == "key_attested"
 }
 
 func reserveChannelPriority(reserved map[string]map[int]struct{}, channel string, priority int) {

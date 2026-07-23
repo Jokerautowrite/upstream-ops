@@ -110,6 +110,28 @@ type AccountRateMappingStore interface {
 	ListAccountRateMappings(targetID uint) ([]AccountRateMapping, error)
 }
 
+// KeyAttestation binds one current Sub2 API-key fingerprint to one monitored
+// same-origin channel. It is explicit operator data, never a name heuristic.
+type KeyAttestation struct {
+	TargetID     uint      `json:"target_id"`
+	AccountID    int64     `json:"account_id"`
+	APIKeySHA256 string    `json:"-"`
+	ChannelID    uint      `json:"channel_id"`
+	Source       string    `json:"source"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+type KeyAttestationInput struct {
+	AccountID int64 `json:"account_id"`
+	ChannelID uint  `json:"channel_id"`
+}
+
+type KeyAttestationStore interface {
+	ListKeyAttestations(targetID uint) ([]KeyAttestation, error)
+	UpsertKeyAttestations(items []KeyAttestation) error
+}
+
 type RateSnapshotStore interface {
 	ListByChannel(channelID uint) ([]storage.RateSnapshot, error)
 }
@@ -191,8 +213,9 @@ type AccountSnapshot struct {
 	SkipReason         string        `json:"skip_reason,omitempty"`
 	MatchStatus        string        `json:"match_status"`
 	FingerprintState   string        `json:"fingerprint_state"`
-	// MultiplierSource: key_exact | account_mapping | display_only | ""
-	// Key 精确匹配才算可信；其余有倍率也只是展示兜底。
+	// MultiplierSource: key_exact | key_attested | account_mapping | display_only | "".
+	// key_attested is an explicit same-origin fingerprint binding, not a name
+	// or group fallback.
 	MultiplierSource string `json:"multiplier_source,omitempty"`
 	IdentityDigest   string `json:"-"`
 }

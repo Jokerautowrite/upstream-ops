@@ -31,11 +31,13 @@ export function accountGroupLabel(account: Sub2PoolAccount) {
   return `${group} / ${channel}`
 }
 
-/** 匹配精准度文案：Key 精确才是可信，其余一律标明非 Key。 */
+/** 匹配精准度文案：远端 Key 精确与人工核验绑定必须明确区分。 */
 export function accountMatchLabel(account: Sub2PoolAccount) {
   switch (account.match_status) {
     case "key_exact":
       return "API Key 精确匹配"
+    case "key_attested":
+      return "已核验 Key 绑定"
     case "account_mapping":
       return "账号映射（非 Key）"
     case "channel_name_exact":
@@ -50,6 +52,8 @@ export function accountMatchLabel(account: Sub2PoolAccount) {
       return "Sub2 未提供 Key 指纹"
     case "upstream_unavailable":
       return "上游 Key 采集不可用"
+    case "monitor_source_missing":
+      return "无同源监控渠道"
     case "url_missing":
       return "上游地址缺失"
     case "refresh_pending":
@@ -62,6 +66,7 @@ export function accountMatchLabel(account: Sub2PoolAccount) {
 export function accountMatchTone(account: Sub2PoolAccount): AccountPoolHealthTone {
   switch (account.match_status) {
     case "key_exact":
+    case "key_attested":
       return "healthy"
     case "account_mapping":
     case "channel_name_exact":
@@ -73,6 +78,8 @@ export function accountMatchTone(account: Sub2PoolAccount): AccountPoolHealthTon
     case "fingerprint_missing":
     case "url_missing":
       return "failed"
+    case "monitor_source_missing":
+      return "warning"
     default:
       return "unknown"
   }
@@ -80,6 +87,7 @@ export function accountMatchTone(account: Sub2PoolAccount): AccountPoolHealthTon
 
 /** 倍率旁的来源标签：可信 / 映射 / 仅展示 */
 export function accountMultiplierSourceLabel(account: Sub2PoolAccount) {
+  if (account.multiplier_source === "key_attested") return "已核验 Key"
   if (account.multiplier_confidence === "trusted" || account.multiplier_source === "key_exact") {
     return "Key 可信"
   }
