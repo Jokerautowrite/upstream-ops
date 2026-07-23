@@ -48,10 +48,12 @@ func TestApplyFromFileUpdatesUpstreamConfig(t *testing.T) {
 		channelSvc,
 		nil,
 		nil,
+		nil,
 		config.ProxyConfig{},
 		config.UpstreamConfig{},
+		config.GatewayConfig{},
 		func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
-			return scheduler.New(scfg, nil, nil, nil, nil, nil, nil, nil, nil, nil, pcfg, log)
+			return scheduler.New(scfg, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, pcfg, log)
 		},
 	)
 

@@ -12,6 +12,7 @@ import type {
   CostTrendPoint,
   DashboardSummary,
   GroupDiscoveryCandidate,
+  GatewayUsageStats,
   NotificationChannel,
   NotificationLogPage,
   RateChangeLogPage,
@@ -135,6 +136,20 @@ function useApi<T>(path: string | null, watchRefresh = true): QueryState<T> {
 
 export function useDashboardSummary() {
   return useApi<DashboardSummary>("/dashboard/summary")
+}
+
+/** 本地自然日起止（RFC3339），用于网关用量「今日」统计 */
+function localDayRangeISO(day = new Date()): { from: string; to: string } {
+  const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0, 0, 0)
+  const end = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 59, 999)
+  return { from: start.toISOString(), to: end.toISOString() }
+}
+
+/** 网关使用记录聚合统计（默认今日本地时区） */
+export function useGatewayUsageStatsToday() {
+  const { from, to } = localDayRangeISO()
+  const qs = new URLSearchParams({ from, to })
+  return useApi<GatewayUsageStats>(`/gateway/usage/stats?${qs}`)
 }
 
 export function useAppVersion() {

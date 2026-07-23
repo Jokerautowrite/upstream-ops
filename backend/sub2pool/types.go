@@ -130,6 +130,8 @@ type KeyAttestationInput struct {
 type KeyAttestationStore interface {
 	ListKeyAttestations(targetID uint) ([]KeyAttestation, error)
 	UpsertKeyAttestations(items []KeyAttestation) error
+}
+
 // DiscoveryAccountStore identifies accounts created by the discovery review
 // workflow. They remain routable, but are excluded from automated priority
 // writes until an explicit promotion path exists.

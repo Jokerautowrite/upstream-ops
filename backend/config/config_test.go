@@ -30,3 +30,23 @@ func TestUpstreamConfigWithDefaultsKeepsCustomUserAgent(t *testing.T) {
 		t.Fatalf("user agent = %q", cfg.UserAgent)
 	}
 }
+
+func TestGatewayConfigWithDefaults(t *testing.T) {
+	cfg := GatewayConfig{}.WithDefaults()
+	if cfg.TempPauseSeconds != DefaultGatewayTempPauseSeconds {
+		t.Fatalf("temp pause = %d", cfg.TempPauseSeconds)
+	}
+	if cfg.ForwardTimeoutSeconds != DefaultGatewayForwardTimeoutSeconds {
+		t.Fatalf("forward timeout = %d", cfg.ForwardTimeoutSeconds)
+	}
+	if cfg.RouteBatchConcurrency != DefaultGatewayRouteBatchConcurrency {
+		t.Fatalf("batch concurrency = %d", cfg.RouteBatchConcurrency)
+	}
+	custom := GatewayConfig{RouteBatchConcurrency: 16, ForwardTimeoutSeconds: 120}.WithDefaults()
+	if custom.RouteBatchConcurrency != 16 || custom.ForwardTimeoutSeconds != 120 {
+		t.Fatalf("custom = %#v", custom)
+	}
+	if custom.ModelsCacheTTLSeconds != DefaultGatewayModelsCacheTTLSeconds {
+		t.Fatalf("models cache ttl = %d", custom.ModelsCacheTTLSeconds)
+	}
+}

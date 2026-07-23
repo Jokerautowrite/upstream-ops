@@ -1,3 +1,4 @@
+// Package storage 提供 GORM 仓储与领域模型持久化。
 package storage
 
 import (
@@ -121,6 +122,7 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := resetLegacyGroupDiscoveryQueue(db); err != nil {
 		return err
 	}
+	// 仅 AutoMigrate 当前模型（网关未发布，不做「密钥→组」等历史数据迁移）
 	return db.AutoMigrate(
 		&Channel{},
 		&AuthSession{},
@@ -141,6 +143,12 @@ func AutoMigrate(db *gorm.DB) error {
 		&UpstreamSyncManagedAccount{},
 		&GroupDiscoveryCandidate{},
 		&UpstreamSyncLog{},
+		&GatewayGroup{},
+		&GatewayKey{},
+		&GatewayRoute{},
+		&GatewayProvider{},
+		&GatewayUsageLog{},
+		&ModelPriceOverride{},
 	)
 }
 

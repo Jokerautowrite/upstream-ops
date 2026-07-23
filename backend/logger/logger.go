@@ -1,3 +1,4 @@
+// Package logger 初始化结构化日志。
 package logger
 
 import (

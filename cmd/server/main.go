@@ -19,6 +19,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/connector/sub2api"
 	"github.com/bejix/upstream-ops/backend/crypto"
 	"github.com/bejix/upstream-ops/backend/discovery"
+	"github.com/bejix/upstream-ops/backend/gateway"
 	"github.com/bejix/upstream-ops/backend/logger"
 	"github.com/bejix/upstream-ops/backend/monitor"
 	"github.com/bejix/upstream-ops/backend/notify"
@@ -109,10 +110,21 @@ func main() {
 	managedSyncAccounts := storage.NewUpstreamSyncManagedAccounts(db)
 	syncLogs := storage.NewUpstreamSyncLogs(db)
 	discoveryCandidates := storage.NewGroupDiscoveryCandidates(db)
+	gatewayGroups := storage.NewGatewayGroups(db)
+	gatewayKeys := storage.NewGatewayKeys(db)
+	gatewayRoutes := storage.NewGatewayRoutes(db)
+	gatewayProviders := storage.NewGatewayProviders(db)
+	gatewayUsage := storage.NewGatewayUsageLogs(db)
+	modelPrices := storage.NewModelPriceOverrides(db)
 
 	channelSvc := channel.NewService(channels, authSessions, captchas, rates, monLogs, cipher)
 	channelSvc.UpdateProxyConfig(cfg.Proxy)
 	channelSvc.UpdateUpstreamConfig(cfg.Upstream)
+	gatewaySvc := gateway.NewService(gatewayGroups, gatewayKeys, gatewayRoutes, gatewayUsage, modelPrices, channels, channelSvc, cipher, log)
+	gatewaySvc.SetProviders(gatewayProviders)
+	gatewaySvc.UpdateProxyConfig(cfg.Proxy)
+	gatewaySvc.UpdateUpstreamConfig(cfg.Upstream)
+	gatewaySvc.UpdateGatewayConfig(cfg.Gateway)
 	dispatcher := notify.NewDispatcher(notifies, cipher, log, notify.Policy{
 		NotificationPrefix:                       cfg.App.NotificationPrefix,
 		BatchRateChanges:                         cfg.Notifications.BatchRateChanges,
@@ -167,7 +179,7 @@ func main() {
 	discoverySvc := discovery.New(channels, discoveryCandidates, syncTargets, syncGroups, cipher, channelSvc)
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
-		scheduled := scheduler.New(scfg, monitorSvc, monLogs, syncLogs, rates, notifies, announcements, captchas, cipher, syncSvc, pcfg, log)
+		scheduled := scheduler.New(scfg, monitorSvc, monLogs, syncLogs, rates, notifies, announcements, captchas, cipher, syncSvc, gatewaySvc, pcfg, log)
 		scheduled.SetSub2Pool(poolRunner)
 		return scheduled
 	}
@@ -184,10 +196,12 @@ func main() {
 		log,
 		dispatcher,
 		channelSvc,
+		gatewaySvc,
 		authSvc,
 		sch,
 		cfg.Proxy,
 		cfg.Upstream,
+		cfg.Gateway,
 		schedulerFactory,
 	)
 
@@ -224,6 +238,11 @@ func main() {
 		Dispatcher:     dispatcher,
 		UpstreamSync:   syncSvc,
 		GroupDiscovery: discoverySvc,
+		Gateway:        gatewaySvc,
+		GatewayGroups:  gatewayGroups,
+		GatewayKeys:    gatewayKeys,
+		GatewayUsage:   gatewayUsage,
+		ModelPrices:    modelPrices,
 		Log:            log,
 		Frontend:       frontendFS,
 	})

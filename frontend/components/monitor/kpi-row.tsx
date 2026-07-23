@@ -1,10 +1,14 @@
 "use client"
 
-import { ArrowUpRight, DollarSign, MessageSquare, Wallet } from "lucide-react"
+import { ArrowUpRight, DollarSign, Layers, MessageSquare, Wallet } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
-import { useDashboardSummary, useRateChanges } from "@/lib/queries"
-import { money } from "@/lib/format"
+import {
+  useDashboardSummary,
+  useGatewayUsageStatsToday,
+  useRateChanges,
+} from "@/lib/queries"
+import { formatTokens, money } from "@/lib/format"
 import type { LucideIcon } from "lucide-react"
 import type { ReactNode } from "react"
 
@@ -26,6 +30,7 @@ function countTodayChanges(changes: { changed_at: string }[]) {
 export function KpiRow() {
   const summary = useDashboardSummary()
   const recentChanges = useRateChanges(1, 100)
+  const gatewayToday = useGatewayUsageStatsToday()
 
   const data = summary.data
   const total = data?.total_channels ?? 0
@@ -37,6 +42,10 @@ export function KpiRow() {
   const lowest = data?.lowest_balance ?? null
 
   const todayChangeCount = countTodayChanges(recentChanges.data?.items ?? [])
+
+  const todayTokens = gatewayToday.data?.total_tokens ?? 0
+  const todayInput = gatewayToday.data?.total_input_tokens ?? 0
+  const todayOutput = gatewayToday.data?.total_output_tokens ?? 0
 
   const kpis: Kpi[] = [
     {
@@ -77,6 +86,20 @@ export function KpiRow() {
       footer: (
         <span className="text-muted-foreground">
           {totalCost > 0 ? "全渠道累计实际扣费" : "暂无累计消费"}
+        </span>
+      ),
+    },
+    {
+      label: "今日 Token",
+      value: formatTokens(todayTokens),
+      icon: Layers,
+      iconBg: "bg-brand/10",
+      iconColor: "text-brand",
+      footer: (
+        <span className="text-muted-foreground">
+          {todayTokens > 0
+            ? `输入: ${formatTokens(todayInput)} / 输出: ${formatTokens(todayOutput)}`
+            : "网关今日暂无调用"}
         </span>
       ),
     },
@@ -123,7 +146,7 @@ export function KpiRow() {
   ]
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
       {kpis.map((k) => (
         <Card
           key={k.label}
@@ -132,7 +155,9 @@ export function KpiRow() {
           <div className="flex min-w-0 flex-col">
             <span className="text-xs text-muted-foreground">{k.label}</span>
             <p className="mt-1 text-xl font-bold tracking-tight text-foreground sm:text-2xl">{k.value}</p>
-            <p className="mt-1 min-w-0 text-xs">{k.footer}</p>
+            <p className="mt-1 min-w-0 truncate text-xs" title={typeof k.footer === "string" ? k.footer : undefined}>
+              {k.footer}
+            </p>
           </div>
           <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl sm:size-10", k.iconBg)}>
             <k.icon className={cn("size-5", k.iconColor)} />

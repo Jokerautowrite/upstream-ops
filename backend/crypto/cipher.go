@@ -1,3 +1,4 @@
+// Package crypto 提供配置密钥的对称加解密（AES）。
 package crypto
 
 import (

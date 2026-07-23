@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState, type FormEvent } from "react"
-import { Copy, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react"
+import { ArrowRightLeft, Copy, Loader2, Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -32,8 +32,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { apiFetch } from "@/lib/api"
+import { copyText as copyToClipboard } from "@/lib/clipboard"
 import { channelTypeLabel, dateTime, decimal, formatRatio } from "@/lib/format"
 import type {
   Channel,
@@ -45,13 +47,24 @@ import type {
 } from "@/lib/api-types"
 import { cn } from "@/lib/utils"
 
+export interface ChannelAPIKeyTargetGroup {
+  id: number | null
+  name: string
+}
+
+export type ChannelAPIKeyInitialAction = {
+  type: "create" | "migrate"
+  targetGroup: ChannelAPIKeyTargetGroup
+}
+
 interface ChannelAPIKeysDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   channel: Channel | null
+  initialAction?: ChannelAPIKeyInitialAction
 }
 
-type Mode = "list" | "create" | "edit"
+type Mode = "list" | "create" | "edit" | "migrate"
 
 interface KeyForm {
   name: string
@@ -135,6 +148,24 @@ function groupDisplayName(key: ChannelAPIKey) {
   return key.group_name || key.group || (key.group_id != null ? `#${key.group_id}` : "—")
 }
 
+function keyMatchesGroup(key: ChannelAPIKey, channel: Channel, group: ChannelAPIKeyTargetGroup) {
+  if (channel.type === "newapi") return (key.group ?? "").trim() === group.name.trim()
+  return key.group_id != null && group.id != null && key.group_id === group.id
+}
+
+function sourceGroupLabel(key: ChannelAPIKey, channel: Channel, groups: ChannelAPIKeyGroup[]) {
+  if (channel.type === "newapi") {
+    const name = (key.group ?? "").trim()
+    if (!name) return "未分组"
+    return groups.some((group) => group.name === name) ? name : `已失效：${name}`
+  }
+
+  if (key.group_id == null) return "未分组"
+  const liveGroup = groups.find((group) => group.id === key.group_id)
+  if (liveGroup) return liveGroup.name
+  return `已失效：${key.group_name?.trim() || `#${key.group_id}`}`
+}
+
 function statusLabel(status: string) {
   switch (status) {
     case "active":
@@ -208,29 +239,7 @@ function maskKey(key: string) {
 }
 
 async function copyText(text: string, label = "已复制") {
-  const writeClipboard = navigator.clipboard?.writeText?.bind(navigator.clipboard)
-  if (writeClipboard) {
-    try {
-      await writeClipboard(text)
-      toast.success(label)
-      return
-    } catch {
-      // 线上非安全上下文或权限受限时走下面的 textarea 兜底。
-    }
-  }
-
-  const textarea = document.createElement("textarea")
-  textarea.value = text
-  textarea.setAttribute("readonly", "")
-  textarea.style.position = "fixed"
-  textarea.style.left = "-9999px"
-  textarea.style.top = "0"
-  document.body.appendChild(textarea)
-  textarea.select()
-  textarea.setSelectionRange(0, text.length)
-  const copied = document.execCommand("copy")
-  document.body.removeChild(textarea)
-  if (!copied) throw new Error("复制失败")
+  await copyToClipboard(text)
   toast.success(label)
 }
 
@@ -238,6 +247,7 @@ export function ChannelAPIKeysDialog({
   open,
   onOpenChange,
   channel,
+  initialAction,
 }: ChannelAPIKeysDialogProps) {
   const { confirm, dialog: confirmDialog } = useConfirm()
   const [mode, setMode] = useState<Mode>("list")
@@ -250,35 +260,68 @@ export function ChannelAPIKeysDialog({
   const [data, setData] = useState<ChannelAPIKeyPage | null>(null)
   const [groups, setGroups] = useState<ChannelAPIKeyGroup[]>([])
   const [groupsLoading, setGroupsLoading] = useState(false)
+  const [groupsError, setGroupsError] = useState<string | null>(null)
+  const [groupsReloadTick, setGroupsReloadTick] = useState(0)
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [listError, setListError] = useState<string | null>(null)
   const [revealingID, setRevealingID] = useState<number | null>(null)
   const [revealedKeys, setRevealedKeys] = useState<Record<number, string>>({})
+  const [selectedKey, setSelectedKey] = useState<ChannelAPIKey | null>(null)
 
   const items = data?.items ?? []
   const totalPages = Math.max(1, data?.pages ?? 1)
   const isNewAPI = channel?.type === "newapi"
   const groupByName = new Map(groups.map((g) => [g.name, g]))
   const groupByID = new Map(groups.filter((g) => g.id != null).map((g) => [String(g.id), g]))
+  const actionType = initialAction?.type
+  const targetGroupID = initialAction?.targetGroup.id ?? null
+  const targetGroupName = initialAction?.targetGroup.name ?? ""
+  const targetGroup = initialAction?.targetGroup
+  const liveTargetGroup = channel?.type === "newapi"
+    ? groupByName.get(targetGroupName)
+    : targetGroupID == null
+      ? undefined
+      : groupByID.get(String(targetGroupID))
+  const targetValidationRequired = initialAction != null && (mode === "create" || mode === "migrate")
+  const targetValidationError = targetValidationRequired
+    ? groupsError || (!groupsLoading && !liveTargetGroup
+      ? "目标分组已失效，请先同步渠道分组。"
+      : null)
+    : null
+  const visibleGroupsError = targetValidationError || (mode === "create" || mode === "edit" ? groupsError : null)
 
   useEffect(() => {
     if (!open) return
-    setMode("list")
+    setMode(actionType ?? "list")
     setEditing(null)
-    setForm(emptyForm)
+    setForm(() => {
+      const next = { ...emptyForm }
+      if (actionType === "create") {
+        if (channel?.type === "newapi") next.group = targetGroupName
+        else if (targetGroupID != null) next.group_id = String(targetGroupID)
+      }
+      return next
+    })
     setPage(1)
     setSearch("")
     setStatus("all")
     setError(null)
+    setListError(null)
+    setGroups([])
+    setGroupsError(null)
+    setGroupsLoading(channel != null)
     setRevealingID(null)
     setRevealedKeys({})
-  }, [open, channel?.id])
+    setSelectedKey(null)
+  }, [open, channel?.id, channel?.type, actionType, targetGroupID, targetGroupName])
 
   useEffect(() => {
     if (!open || !channel) return
     let cancelled = false
     setGroupsLoading(true)
+    setGroupsError(null)
     apiFetch<ChannelAPIKeyGroup[]>(`/channels/${channel.id}/api-keys/groups`)
       .then((res) => {
         if (cancelled) return
@@ -287,7 +330,7 @@ export function ChannelAPIKeysDialog({
       .catch((e) => {
         if (cancelled) return
         const err = e as Error
-        toast.error(err.message || "加载分组失败")
+        setGroupsError(err.message || "加载分组失败")
         setGroups([])
       })
       .finally(() => {
@@ -296,10 +339,10 @@ export function ChannelAPIKeysDialog({
     return () => {
       cancelled = true
     }
-  }, [open, channel])
+  }, [open, channel, groupsReloadTick])
 
   useEffect(() => {
-    if (!open || !channel || mode !== "list") return
+    if (!open || !channel || (mode !== "list" && mode !== "migrate")) return
     let cancelled = false
     const params = new URLSearchParams({
       page: String(page),
@@ -308,7 +351,7 @@ export function ChannelAPIKeysDialog({
     if (search.trim()) params.set("search", search.trim())
     if (status !== "all") params.set("status", status)
     setLoading(true)
-    setError(null)
+    setListError(null)
     apiFetch<ChannelAPIKeyPage>(`/channels/${channel.id}/api-keys?${params.toString()}`)
       .then((res) => {
         if (cancelled) return
@@ -323,7 +366,7 @@ export function ChannelAPIKeysDialog({
       .catch((e) => {
         if (cancelled) return
         const err = e as Error
-        setError(err.message || "加载密钥失败")
+        setListError(err.message || "加载密钥失败")
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -337,14 +380,23 @@ export function ChannelAPIKeysDialog({
     setReloadTick((tick) => tick + 1)
   }
 
+  function retryGroups() {
+    setGroupsReloadTick((tick) => tick + 1)
+  }
+
   function openCreate() {
     setEditing(null)
     setForm(() => {
       const next = { ...emptyForm }
-      const first = groups[0]
-      if (first) {
-        if (channel?.type === "newapi") next.group = first.name
-        else if (first.id != null) next.group_id = String(first.id)
+      if (actionType === "create" && targetGroup) {
+        if (channel?.type === "newapi") next.group = targetGroup.name
+        else if (targetGroup.id != null) next.group_id = String(targetGroup.id)
+      } else {
+        const first = groups[0]
+        if (first) {
+          if (channel?.type === "newapi") next.group = first.name
+          else if (first.id != null) next.group_id = String(first.id)
+        }
       }
       return next
     })
@@ -405,6 +457,10 @@ export function ChannelAPIKeysDialog({
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     if (!channel) return
+    if (mode === "create" && initialAction && !liveTargetGroup) {
+      setError(targetValidationError || "目标分组尚未通过校验。")
+      return
+    }
     setSubmitting(true)
     setError(null)
     try {
@@ -418,7 +474,10 @@ export function ChannelAPIKeysDialog({
           if (created.id) {
             setRevealedKeys((prev) => ({ ...prev, [created.id]: created.key }))
           }
-          void copyText(created.key, "密钥已创建并复制")
+          void copyText(created.key, "密钥已创建并复制").catch((err: Error) => {
+            toast.success("密钥已创建")
+            toast.error(err?.message || "自动复制失败，请手动复制")
+          })
         }
       } else if (editing) {
         await apiFetch<ChannelAPIKey>(`/channels/${channel.id}/api-keys/${editing.id}`, {
@@ -435,6 +494,40 @@ export function ChannelAPIKeysDialog({
     } catch (e) {
       const err = e as Error
       setError(err.message || "保存密钥失败")
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function migrateSelectedKey() {
+    if (!channel || !selectedKey || !targetGroup || !liveTargetGroup) {
+      setError(targetValidationError || "请选择要迁移的 API Key。")
+      return
+    }
+
+    const sourceGroup = sourceGroupLabel(selectedKey, channel, groups)
+    const ok = await confirm({
+      title: `迁移 API Key「${selectedKey.name || selectedKey.id}」？`,
+      description: `${sourceGroup} → ${liveTargetGroup.name}`,
+      confirmLabel: "确认迁移",
+    })
+    if (!ok) return
+
+    setSubmitting(true)
+    setError(null)
+    try {
+      const payload = channel.type === "newapi"
+        ? { group: liveTargetGroup.name }
+        : { group_id: targetGroupID }
+      await apiFetch<ChannelAPIKey>(`/channels/${channel.id}/api-keys/${selectedKey.id}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+      toast.success(`API Key「${selectedKey.name || selectedKey.id}」已从「${sourceGroup}」迁移到「${liveTargetGroup.name}」`)
+      onOpenChange(false)
+    } catch (e) {
+      const err = e as Error
+      setError(err.message || "迁移 API Key 失败")
     } finally {
       setSubmitting(false)
     }
@@ -495,8 +588,11 @@ export function ChannelAPIKeysDialog({
     }
   }
 
+  const isMigrate = mode === "migrate"
+  const targetLocked = mode === "create" && actionType === "create" && targetGroup != null
+  const dialogTitle = isMigrate ? "迁移 API Key" : "API 密钥管理"
   const description = channel
-    ? `${channel.name} · ${channelTypeLabel(channel.type)}`
+    ? `${channel.name} · ${channelTypeLabel(channel.type)}${initialAction ? ` · 目标分组 ${targetGroupName}` : ""}`
     : "管理上游 API 密钥。"
 
   return (
@@ -504,11 +600,32 @@ export function ChannelAPIKeysDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="sm:max-w-5xl">
           <DialogHeader>
-            <DialogTitle>API 密钥管理</DialogTitle>
+            <DialogTitle>{dialogTitle}</DialogTitle>
             <DialogDescription>{description}</DialogDescription>
           </DialogHeader>
 
-          {mode === "list" ? (
+          {mode !== "list" && (groupsLoading || visibleGroupsError) ? (
+            <div className={cn(
+              "flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm",
+              visibleGroupsError
+                ? "border-destructive/30 bg-destructive/5 text-destructive"
+                : "border-border bg-muted/20 text-muted-foreground",
+            )}>
+              <span className="min-w-0 break-words">
+                {groupsLoading ? "正在校验目标分组…" : visibleGroupsError}
+              </span>
+              {visibleGroupsError ? (
+                <Button type="button" variant="outline" size="sm" className="shrink-0 gap-1.5" onClick={retryGroups}>
+                  <RefreshCw className="size-3.5" />
+                  重试校验
+                </Button>
+              ) : (
+                <Loader2 className="size-4 shrink-0 animate-spin" />
+              )}
+            </div>
+          ) : null}
+
+          {mode === "list" || mode === "migrate" ? (
             <div className="space-y-4">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -543,23 +660,43 @@ export function ChannelAPIKeysDialog({
                     </SelectContent>
                   </Select>
                 </div>
-                <Button type="button" size="sm" className="w-full gap-1.5 sm:w-auto" onClick={openCreate}>
-                  <Plus className="size-4" />
-                  新建密钥
-                </Button>
+                {isMigrate ? (
+                  <div className="flex min-h-9 items-center gap-2 text-xs text-muted-foreground">
+                    <ArrowRightLeft className="size-4" />
+                    <span>迁移到</span>
+                    <Badge variant="outline" className="max-w-56 truncate text-foreground">
+                      {liveTargetGroup?.name || targetGroupName}
+                    </Badge>
+                  </div>
+                ) : (
+                  <Button type="button" size="sm" className="w-full gap-1.5 sm:w-auto" onClick={openCreate}>
+                    <Plus className="size-4" />
+                    新建密钥
+                  </Button>
+                )}
               </div>
 
+              <RadioGroup
+                role={isMigrate ? "radiogroup" : "presentation"}
+                value={selectedKey == null ? "" : String(selectedKey.id)}
+                onValueChange={(value) => {
+                  const key = items.find((item) => String(item.id) === value)
+                  if (key) setSelectedKey(key)
+                }}
+                className="block"
+              >
               <div className="overflow-hidden rounded-lg border border-border">
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      {isMigrate ? <TableHead className="w-12"><span className="sr-only">选择</span></TableHead> : null}
                       <TableHead className="min-w-28">名称</TableHead>
                       <TableHead className="min-w-40">密钥</TableHead>
                       <TableHead>状态</TableHead>
-                          <TableHead className="min-w-52">分组</TableHead>
+                      <TableHead className="min-w-52">分组</TableHead>
                       <TableHead className="min-w-24">额度</TableHead>
                       <TableHead className="min-w-32">过期</TableHead>
-                      <TableHead className="min-w-28 text-right">操作</TableHead>
+                      {!isMigrate ? <TableHead className="min-w-28 text-right">操作</TableHead> : null}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -580,18 +717,43 @@ export function ChannelAPIKeysDialog({
                       items.map((item) => {
                         const displayKey = revealedKeys[item.id] || maskKey(item.key)
                         const isRevealing = revealingID === item.id
+                        const isCurrentTarget = !!(isMigrate && channel && targetGroup && keyMatchesGroup(item, channel, targetGroup))
+                        const migrationSourceGroup = channel ? sourceGroupLabel(item, channel, groups) : "未分组"
+                        const selectionDisabled = isCurrentTarget || groupsLoading || targetValidationError != null
                         return (
-                        <TableRow key={item.id}>
+                        <TableRow
+                          key={item.id}
+                          className={cn(
+                            isMigrate && !selectionDisabled && "cursor-pointer",
+                            isCurrentTarget && "bg-muted/30 opacity-60",
+                          )}
+                          onClick={() => {
+                            if (isMigrate && !selectionDisabled) setSelectedKey(item)
+                          }}
+                        >
+                          {isMigrate ? (
+                            <TableCell onClick={(event) => event.stopPropagation()}>
+                              <RadioGroupItem
+                                value={String(item.id)}
+                                disabled={selectionDisabled}
+                                aria-label={`选择 ${item.name || item.id}`}
+                              />
+                            </TableCell>
+                          ) : null}
                           <TableCell className="font-medium">{item.name || "未命名"}</TableCell>
                           <TableCell className="min-w-40">
-                            <Input
-                              readOnly
-                              value={isRevealing ? "加载中…" : displayKey}
-                              className="h-8 w-40 cursor-pointer truncate font-mono text-xs sm:w-48"
-                              title="点击显示完整密钥"
-                              disabled={isRevealing}
-                              onClick={() => void revealAndShow(item)}
-                            />
+                            {isMigrate ? (
+                              <span className="font-mono text-xs">{maskKey(item.key)}</span>
+                            ) : (
+                              <Input
+                                readOnly
+                                value={isRevealing ? "加载中…" : displayKey}
+                                className="h-8 w-40 cursor-pointer truncate font-mono text-xs sm:w-48"
+                                title="点击显示完整密钥"
+                                disabled={isRevealing}
+                                onClick={() => void revealAndShow(item)}
+                              />
+                            )}
                           </TableCell>
                           <TableCell>
                             <Badge variant="outline" className={cn(statusClass(item.status))}>
@@ -600,7 +762,12 @@ export function ChannelAPIKeysDialog({
                           </TableCell>
                           <TableCell>
                             <div className="max-w-64 whitespace-normal">
-                              <p className="break-words text-xs font-medium">{groupDisplayName(item)}</p>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <p className="break-words text-xs font-medium">
+                                  {isMigrate ? migrationSourceGroup : groupDisplayName(item)}
+                                </p>
+                                {isCurrentTarget ? <Badge variant="outline">已在当前分组</Badge> : null}
+                              </div>
                               <p className="break-words text-[11px] leading-4 text-muted-foreground">
                                 {item.group_description || "无描述"}
                               </p>
@@ -625,7 +792,7 @@ export function ChannelAPIKeysDialog({
                                 ? dateTime(item.expires_at)
                                 : "永不过期"}
                           </TableCell>
-                          <TableCell>
+                          {!isMigrate ? <TableCell>
                             <div className="flex justify-end gap-1">
                               <Button
                                 type="button"
@@ -661,7 +828,7 @@ export function ChannelAPIKeysDialog({
                                 <Trash2 className="size-4" />
                               </Button>
                             </div>
-                          </TableCell>
+                          </TableCell> : null}
                         </TableRow>
                         )
                       })
@@ -669,8 +836,17 @@ export function ChannelAPIKeysDialog({
                   </TableBody>
                 </Table>
               </div>
+              </RadioGroup>
 
-              {error ? <p className="text-sm text-destructive">{error}</p> : null}
+              {listError ? (
+                <div className="flex items-center justify-between gap-3 text-sm text-destructive" role="alert">
+                  <span className="min-w-0 break-words">{listError}</span>
+                  <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={reload}>
+                    重新加载
+                  </Button>
+                </div>
+              ) : null}
+              {isMigrate && error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
 
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-xs text-muted-foreground">
@@ -697,6 +873,24 @@ export function ChannelAPIKeysDialog({
                   </Button>
                 </div>
               </div>
+
+              {isMigrate ? (
+                <DialogFooter className="gap-2 sm:gap-0">
+                  <div className="mr-auto min-w-0 text-left text-xs text-muted-foreground">
+                    {selectedKey ? `已选择：${selectedKey.name || selectedKey.id}` : "请选择一个 API Key"}
+                  </div>
+                  <Button type="button" variant="outline" disabled={submitting} onClick={() => onOpenChange(false)}>
+                    取消
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={submitting || groupsLoading || targetValidationError != null || selectedKey == null}
+                    onClick={() => void migrateSelectedKey()}
+                  >
+                    {submitting ? "迁移中…" : "迁移"}
+                  </Button>
+                </DialogFooter>
+              ) : null}
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -737,9 +931,9 @@ export function ChannelAPIKeysDialog({
               </div>
 
               {isNewAPI ? (
-                <NewAPIFields form={form} setForm={setForm} disabled={submitting} groups={groups} groupsLoading={groupsLoading} selectedGroup={groupByName.get(form.group)} />
+                <NewAPIFields form={form} setForm={setForm} disabled={submitting} groups={groups} groupsLoading={groupsLoading} groupLocked={targetLocked} selectedGroup={groupByName.get(form.group)} />
               ) : (
-                <Sub2APIFields form={form} setForm={setForm} disabled={submitting} mode={mode} groups={groups} groupsLoading={groupsLoading} selectedGroup={groupByID.get(form.group_id)} />
+                <Sub2APIFields form={form} setForm={setForm} disabled={submitting} mode={mode} groups={groups} groupsLoading={groupsLoading} groupLocked={targetLocked} selectedGroup={groupByID.get(form.group_id)} />
               )}
 
               {error ? (
@@ -761,7 +955,7 @@ export function ChannelAPIKeysDialog({
                 >
                   返回
                 </Button>
-                <Button type="submit" disabled={submitting}>
+                <Button type="submit" disabled={submitting || groupsLoading || targetValidationError != null}>
                   {submitting ? "保存中…" : mode === "create" ? "创建" : "保存"}
                 </Button>
               </DialogFooter>
@@ -808,6 +1002,7 @@ function NewAPIFields({
   disabled,
   groups,
   groupsLoading,
+  groupLocked,
   selectedGroup,
 }: {
   form: KeyForm
@@ -815,6 +1010,7 @@ function NewAPIFields({
   disabled: boolean
   groups: ChannelAPIKeyGroup[]
   groupsLoading: boolean
+  groupLocked: boolean
   selectedGroup?: ChannelAPIKeyGroup
 }) {
   return (
@@ -824,7 +1020,7 @@ function NewAPIFields({
           <Select
             value={form.group}
             onValueChange={(value) => setForm((f) => ({ ...f, group: value }))}
-            disabled={disabled || groupsLoading}
+            disabled={disabled || groupsLoading || groupLocked}
           >
             <SelectTrigger className="w-full">
               {selectedGroup ? (
@@ -879,6 +1075,7 @@ function Sub2APIFields({
   mode,
   groups,
   groupsLoading,
+  groupLocked,
   selectedGroup,
 }: {
   form: KeyForm
@@ -887,6 +1084,7 @@ function Sub2APIFields({
   mode: Mode
   groups: ChannelAPIKeyGroup[]
   groupsLoading: boolean
+  groupLocked: boolean
   selectedGroup?: ChannelAPIKeyGroup
 }) {
   return (
@@ -896,7 +1094,7 @@ function Sub2APIFields({
           <Select
             value={form.group_id}
             onValueChange={(value) => setForm((f) => ({ ...f, group_id: value }))}
-            disabled={disabled || groupsLoading}
+            disabled={disabled || groupsLoading || groupLocked}
           >
             <SelectTrigger className="w-full">
               {selectedGroup ? (

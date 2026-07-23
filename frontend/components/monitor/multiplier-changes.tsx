@@ -83,7 +83,7 @@ export function MultiplierChanges() {
 
   return (
     <>
-      <Card className="min-h-0 overflow-hidden border border-border shadow-none lg:h-100">
+      <Card className="min-h-0 overflow-hidden border border-border py-4 shadow-none lg:h-100 sm:py-6">
         <CardHeader className="flex shrink-0 flex-row items-center justify-between px-4 pb-2 sm:px-6">
           <CardTitle className="text-base font-semibold">{"最近倍率变动"}</CardTitle>
           <div className="flex items-center gap-3">
